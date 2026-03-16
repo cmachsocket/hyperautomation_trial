@@ -37,13 +37,18 @@ const fetchUpdatedMap = async () => {
   error.value = ''
 
   try {
-    const response = await fetch(`${apiBase}/api/merged-map`)
+    const response = await fetch(`${apiBase}/api/merged-map/${encodeURIComponent(demoSwitchId)}`)
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    data.value = await response.json()
+    const item = await response.json()
+    data.value = {
+      size: 1,
+      entries: [item],
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : '获取数据失败'
   } finally {

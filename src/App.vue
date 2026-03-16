@@ -1,9 +1,11 @@
 <script setup>
 import { computed, defineAsyncComponent, reactive } from 'vue'
-import ScriptsHomePage from './pages/ScriptsHomePage.vue'
+import AiChatWidget from './components/dynamic/AiChatWidget.vue'
+import ScriptControlPage from './manual-pages/ScriptControlPage.vue'
 
 const componentModules = import.meta.glob('./components/dynamic/**/*.vue')
 const pageModules = import.meta.glob('./pages/**/*.vue')
+const fixedAiChatPath = './components/dynamic/AiChatWidget.vue'
 
 const moduleMap = {
   ...componentModules,
@@ -16,11 +18,13 @@ const toLabel = (path) => {
 }
 
 const options = computed(() => {
-  const componentOptions = Object.keys(componentModules).map((path) => ({
-    path,
-    type: '组件',
-    label: toLabel(path),
-  }))
+  const componentOptions = Object.keys(componentModules)
+    .filter((path) => path !== fixedAiChatPath)
+    .map((path) => ({
+      path,
+      type: '组件',
+      label: toLabel(path),
+    }))
 
   const pageOptions = Object.keys(pageModules).map((path) => ({
     path,
@@ -60,10 +64,19 @@ const getAsyncView = (path) => {
 
     <section class="panel">
       <div class="panel-head">
-        <h2>顶层脚本列表</h2>
+        <h2>AI Chat</h2>
       </div>
       <div class="panel-body">
-        <ScriptsHomePage />
+        <AiChatWidget />
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Script Control</h2>
+      </div>
+      <div class="panel-body">
+        <ScriptControlPage />
       </div>
     </section>
 

@@ -7,9 +7,15 @@ Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://
 ## WebSocket Server
 
 - Install dependencies: `npm install`
-- Start server: `npm run ws:server`
+- Start server (Python, default): `npm run ws:server`
+- Start Python server (explicit): `npm run ws:server:py`
+- Start Node server (legacy): `npm run ws:server:node`
 - Default address: `ws://localhost:8081`
 - Custom port: `WS_PORT=9001 npm run ws:server`
+
+Python server dependency:
+
+- `pip install -r server/requirements.txt`
 
 Expected client message format:
 
@@ -26,18 +32,18 @@ Server behavior:
 - Accepts JSON objects from multiple clients.
 - Requires `id` (`string` or `number`).
 - Updates data by `id` in in-memory `Map` (same `id` replaces previous value).
-- Exposes latest map snapshot: `GET /api/merged-map`
-- Accepts state update JSON: `POST /api/device-state`
-- Accepts device command JSON: `POST /api/device-command`
+- Exposes map data by id: `GET /api/merged-map/{id}` (or `GET /api/merged-map?id={id}`)
+- Accepts state update JSON: `POST /api/device-state` (also `POST /api/device/state`)
+- Accepts device command JSON: `POST /api/device-command` (also `POST /api/device/command`)
 - Broadcasts `state-updated` JSON to all WS clients
 - Exposes script list: `GET /api/scripts`
 - Starts script by id: `POST /api/scripts/start` with `{ "id": "demo-worker-alpha" }`
 - Stops script by id: `POST /api/scripts/stop` with `{ "id": "demo-worker-alpha" }`
 
-## Python Test Client
+## Python IoT Test Clients
 
 - Install dependency: `pip install websockets`
-- Run example: `python server/test_ws_client.py --clients 4 --messages 5`
+- Run example: `python server/test_clients_iot/test_ws_client.py --clients 4 --messages 5`
 - Optional args:
 	- `--url ws://localhost:8081`
 	- `--interval 0.5`
@@ -51,7 +57,7 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 ## Frontend Demo Component
 
 - Dynamic widget name: `UpdatedMapWidget`
-- It polls `http://localhost:8081/api/merged-map` every 2 seconds and shows latest updated data.
+- It polls `http://localhost:8081/api/merged-map/{id}` every 2 seconds and shows latest updated data.
 - It has a switch button; clicking sends `{ "id": "demo-switch-1", "action": "toggle" }` to `POST /api/device-state`.
 - The server returns authoritative current switch state (`currentSwitchOn`), and the page updates UI based on the response.
 - The server also broadcasts a `state-updated` event for clients to receive.
@@ -62,10 +68,6 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 
 - Page name: `ScriptControlPage`
 - Each row is one script with status + start/stop buttons.
-- Controlled scripts are separated files under `src/scripts/`.
+- Controlled scripts are auto-discovered from `src/scripts/` (all `.js` files).
 - These scripts run independently (standalone) and do not go through server command forwarding.
 
-## Scripts Home Page
-
-- Page name: `ScriptsHomePage`
-- Used as top-level main view, displaying script list/status overview and start/stop buttons.
