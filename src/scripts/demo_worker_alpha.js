@@ -30,8 +30,10 @@ async function toggleByServer() {
     throw new Error(result.message || `HTTP ${response.status}`);
   }
 
+  const switchOn = result?.updated?.switchOn;
+
   console.log(
-    `alpha tick ${tick}: server toggled ${targetId}, currentSwitchOn=${result.currentSwitchOn}`
+    `alpha tick ${tick}: server toggled ${targetId}, switchOn=${switchOn}`
   );
 }
 

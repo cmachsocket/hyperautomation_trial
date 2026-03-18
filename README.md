@@ -60,7 +60,7 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 - Example module names: `UpdatedMapWidget`, `DashboardPage`, `ReportPage`
 - It polls `http://localhost:8081/api/merged-map/{id}` every 2 seconds and shows latest updated data.
 - It has a switch button; clicking sends `{ "id": "demo-switch-1", "action": "toggle" }` to `POST /api/device/command`.
-- The server returns authoritative current switch state (`currentSwitchOn`), and the page updates UI based on the response.
+- The server returns latest state in `updated`; the page reads switch state from `updated.switchOn`.
 - The server also broadcasts a `state-updated` event for clients to receive.
 - If your server address is different, set `VITE_WS_SERVER_URL`, for example:
 	- `VITE_WS_SERVER_URL=http://127.0.0.1:9001 npm run dev`

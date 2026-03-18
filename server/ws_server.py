@@ -107,10 +107,10 @@ async def dispatch_device_command(device_id: str, payload: dict[str, Any]) -> di
     pending_commands[request_id] = future
 
     message = {
+        **payload,
         "type": "device-command",
         "id": device_id,
         "requestId": request_id,
-        **payload,
     }
 
     await target.send_str(json.dumps(message, ensure_ascii=False))
@@ -205,14 +205,10 @@ async def device_command(request: web.Request) -> web.Response:
     if not isinstance(command, str) or not command:
         return json_response({"message": "Payload must include command (string)"}, status=400)
 
-    result = await dispatch_device_command(
-        device_id,
-        {
-            "command": command,
-            "switchOn": payload.get("switchOn"),
-            "source": payload.get("source", "api-command"),
-        },
-    )
+    command_payload = {k: v for k, v in payload.items() if k != "id"}
+    command_payload.setdefault("source", "api-command")
+
+    result = await dispatch_device_command(device_id, command_payload)
 
     if not result.get("ok"):
         return json_response({"message": result.get("message", "Command failed")}, status=int(result.get("statusCode", 400)))
@@ -233,15 +229,11 @@ async def device_state(request: web.Request) -> web.Response:
     if device_id is None:
         return json_response({"message": "Payload must include id (string | number)"}, status=400)
 
-    command = "toggle" if payload.get("action") == "toggle" else "set-switch"
-    result = await dispatch_device_command(
-        device_id,
-        {
-            "command": command,
-            "switchOn": payload.get("switchOn"),
-            "source": payload.get("source", "api-device-state"),
-        },
-    )
+    command_payload = {k: v for k, v in payload.items() if k not in {"id", "action"}}
+    command_payload["command"] = "toggle" if payload.get("action") == "toggle" else "set-switch"
+    command_payload.setdefault("source", "api-device-state")
+
+    result = await dispatch_device_command(device_id, command_payload)
 
     if not result.get("ok"):
         return json_response({"message": result.get("message", "Command failed")}, status=int(result.get("statusCode", 400)))
@@ -297,23 +289,16 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
             register_socket_for_device(ws, device_id)
 
             if payload.get("type") == "device-state-report":
-                updated = set_by_id(
-                    {
-                        "id": device_id,
-                        "client": payload.get("client"),
-                        "switchOn": bool(payload.get("switchOn")),
-                        "status": payload.get("status", "ok"),
-                        "source": payload.get("source", "example-program"),
-                        "updatedAt": payload.get("updatedAt", utc_now_iso()),
-                    }
-                )
+                report_payload = dict(payload)
+                report_payload["id"] = device_id
+                report_payload.setdefault("updatedAt", utc_now_iso())
+                updated = set_by_id(report_payload)
 
                 event = {
                     "type": "state-updated",
                     "id": device_id,
                     "updated": updated,
-                    "currentSwitchOn": bool(updated.get("switchOn")),
-                    "updatedAt": payload.get("updatedAt", utc_now_iso()),
+                    "updatedAt": report_payload["updatedAt"],
                 }
                 await broadcast(event)
 
@@ -326,7 +311,6 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
                                 "type": "device-command-result",
                                 "id": device_id,
                                 "updated": updated,
-                                "currentSwitchOn": bool(updated.get("switchOn")),
                                 "updatedAt": event["updatedAt"],
                                 "requestId": request_id,
                             }
