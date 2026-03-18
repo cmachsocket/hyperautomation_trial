@@ -82,6 +82,7 @@ const toggleDemoSwitch = async () => {
 
     const result = await response.json()
     upsertEntryFromServer(result.id, result.updated, result.updatedAt)
+    await fetchUpdatedMap()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '更新开关失败'
   } finally {

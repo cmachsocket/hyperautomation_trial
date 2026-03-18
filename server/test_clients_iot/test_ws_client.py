@@ -12,7 +12,7 @@ async def run_client(
     interval: float,
 ) -> None:
     client_name = f"client-{client_index}"
-    device_id = f"device-{client_index % 2}"
+    device_id = f"device-{client_index}"
     switch_on = False
 
     async with websockets.connect(url) as ws:
