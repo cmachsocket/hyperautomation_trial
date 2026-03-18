@@ -12,7 +12,7 @@ process.on('SIGTERM', () => {
 });
 
 async function toggleByServer() {
-  const response = await fetch(`${serverBase}/api/device-command`, {
+  const response = await fetch(`${serverBase}/api/device/command`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

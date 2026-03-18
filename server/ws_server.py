@@ -360,8 +360,6 @@ def create_app() -> web.Application:
     app.router.add_get("/api/scripts", get_scripts)
     app.router.add_post("/api/scripts/start", scripts_start)
     app.router.add_post("/api/scripts/stop", scripts_stop)
-    app.router.add_post("/api/device-command", device_command)
-    app.router.add_post("/api/device-state", device_state)
     app.router.add_post("/api/device/command", device_command)
     app.router.add_post("/api/device/state", device_state)
     app.router.add_post("/api/seed-sample", seed_sample)

@@ -67,7 +67,7 @@ const toggleDemoSwitch = async () => {
       source: 'frontend-widget',
     }
 
-    const response = await fetch(`${apiBase}/api/device-command`, {
+    const response = await fetch(`${apiBase}/api/device/command`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

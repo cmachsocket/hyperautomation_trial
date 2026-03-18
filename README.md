@@ -33,8 +33,8 @@ Server behavior:
 - Requires `id` (`string` or `number`).
 - Updates data by `id` in in-memory `Map` (same `id` replaces previous value).
 - Exposes map data by id: `GET /api/merged-map/{id}` (or `GET /api/merged-map?id={id}`)
-- Accepts state update JSON: `POST /api/device-state` (also `POST /api/device/state`)
-- Accepts device command JSON: `POST /api/device-command` (also `POST /api/device/command`)
+- Accepts state update JSON: `POST /api/device/state`
+- Accepts device command JSON: `POST /api/device/command`
 - Broadcasts `state-updated` JSON to all WS clients
 - Exposes script list: `GET /api/scripts`
 - Starts script by id: `POST /api/scripts/start` with `{ "id": "demo-worker-alpha" }`
@@ -59,7 +59,7 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 - Dynamic module directory: `src/components/dynamic/`（页面与 widgets 已合并）
 - Example module names: `UpdatedMapWidget`, `DashboardPage`, `ReportPage`
 - It polls `http://localhost:8081/api/merged-map/{id}` every 2 seconds and shows latest updated data.
-- It has a switch button; clicking sends `{ "id": "demo-switch-1", "action": "toggle" }` to `POST /api/device-state`.
+- It has a switch button; clicking sends `{ "id": "demo-switch-1", "action": "toggle" }` to `POST /api/device/command`.
 - The server returns authoritative current switch state (`currentSwitchOn`), and the page updates UI based on the response.
 - The server also broadcasts a `state-updated` event for clients to receive.
 - If your server address is different, set `VITE_WS_SERVER_URL`, for example:
