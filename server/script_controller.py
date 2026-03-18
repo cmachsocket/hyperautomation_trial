@@ -50,29 +50,62 @@ def discover_script_defs(scripts_dir: Path = SCRIPTS_DIR) -> list[ScriptDef]:
 
 class ScriptController:
     def __init__(self) -> None:
-        script_defs = discover_script_defs()
-        self._defs = {item.id: item for item in script_defs}
-        self._ordered_ids = [item.id for item in script_defs]
+        self._defs: dict[str, ScriptDef] = {}
+        self._ordered_ids: list[str] = []
         self._proc_map: dict[str, subprocess.Popen[str]] = {}
-        self._status_map: dict[str, dict[str, Any]] = {
-            item.id: {
-                "id": item.id,
-                "name": item.name,
-                "running": False,
-                "pid": None,
-                "lastStartedAt": None,
-                "lastExitedAt": None,
-                "lastExitCode": None,
-                "stopRequestedAt": None,
-            }
-            for item in script_defs
+        self._status_map: dict[str, dict[str, Any]] = {}
+        self._sync_defs()
+
+    def _base_status(self, script_def: ScriptDef) -> dict[str, Any]:
+        return {
+            "id": script_def.id,
+            "name": script_def.name,
+            "running": False,
+            "pid": None,
+            "lastStartedAt": None,
+            "lastExitedAt": None,
+            "lastExitCode": None,
+            "stopRequestedAt": None,
         }
 
+    def _sync_defs(self) -> None:
+        script_defs = discover_script_defs()
+        current_ids = {item.id for item in script_defs}
+
+        self._defs = {item.id: item for item in script_defs}
+        self._ordered_ids = [item.id for item in script_defs]
+
+        for item in script_defs:
+            prev = self._status_map.get(item.id)
+            if prev is None:
+                self._status_map[item.id] = self._base_status(item)
+                continue
+
+            self._status_map[item.id] = {
+                **prev,
+                "id": item.id,
+                "name": item.name,
+            }
+
+        # Remove statuses for scripts that no longer exist and are not running.
+        for script_id in list(self._status_map.keys()):
+            if script_id in current_ids:
+                continue
+
+            proc = self._proc_map.get(script_id)
+            if proc and proc.poll() is None:
+                continue
+
+            self._status_map.pop(script_id, None)
+            self._proc_map.pop(script_id, None)
+
     def list_scripts(self) -> list[dict[str, Any]]:
+        self._sync_defs()
         self._refresh_states()
         return [dict(self._status_map[script_id]) for script_id in self._ordered_ids]
 
     def start_script_by_id(self, script_id: str) -> dict[str, Any]:
+        self._sync_defs()
         self._refresh_states()
         script_def = self._defs.get(script_id)
         if not script_def:
@@ -106,6 +139,7 @@ class ScriptController:
         return {"ok": True, "alreadyRunning": False, "script": dict(next_status)}
 
     def stop_script_by_id(self, script_id: str) -> dict[str, Any]:
+        self._sync_defs()
         self._refresh_states()
         script_def = self._defs.get(script_id)
         if not script_def:

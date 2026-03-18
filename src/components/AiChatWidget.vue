@@ -1,7 +1,7 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 
-const AI_ENDPOINT = import.meta.env.VITE_AI_ENDPOINT ?? 'http://localhost:8082/api/chat'
+const AI_ENDPOINT = import.meta.env.VITE_AI_ENDPOINT ?? '/api/chat'
 
 const history = ref([])
 const input = ref('')
@@ -82,7 +82,12 @@ async function sendMessage() {
       }
     }
   } catch (err) {
-    errorMsg.value = err.message ?? '连接失败'
+    const message = err?.message ?? ''
+    if (message.includes('HTTP 502')) {
+      errorMsg.value = 'AI 服务不可用（HTTP 502）。请先启动：npm run ai:controller'
+    } else {
+      errorMsg.value = message || '连接失败'
+    }
     if (history.value[streamingIdx]?.content === '') {
       history.value.splice(streamingIdx, 1)
     }

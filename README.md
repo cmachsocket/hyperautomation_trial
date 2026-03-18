@@ -73,3 +73,10 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 - Controlled scripts are auto-discovered from `src/scripts/` (all `.js` files).
 - These scripts run independently (standalone) and do not go through server command forwarding.
 
+## AI Chat (HTTP 502 排查)
+
+- AI 聊天接口默认走前端同源路径 `/api/chat`，由 Vite 代理到 `http://127.0.0.1:8082`。
+- 如果 AI 聊天出现 `HTTP 502`，通常是 AI 服务未启动。
+- 启动命令：`npm run ai:controller`
+- 一键同时启动 WS + AI：`npm run servers:start`
+

@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 
-const apiBase = import.meta.env.VITE_WS_SERVER_URL || 'http://localhost:8081'
+const apiBase = import.meta.env.VITE_WS_SERVER_URL || ''
 const scripts = ref([])
 const loading = ref(false)
 const error = ref('')
