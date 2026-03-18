@@ -93,7 +93,7 @@ async def broadcast(payload: dict[str, Any]) -> None:
         unregister_socket(client)
 
 
-async def dispatch_device_command(device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def dispatch_device_command(device_id: str, command_request: dict[str, Any]) -> dict[str, Any]:
     sockets = device_sockets.get(device_id)
     if not sockets:
         return {"ok": False, "statusCode": 404, "message": "Target device is not connected"}
@@ -106,8 +106,19 @@ async def dispatch_device_command(device_id: str, payload: dict[str, Any]) -> di
     future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
     pending_commands[request_id] = future
 
+    command_payload = dict(command_request)
+    old_payload = command_payload.get("payload")
+    new_payload = old_payload if isinstance(old_payload, dict) else {}
+
+    reserved_fields = {"type", "id", "requestId", "command", "client", "source", "payload"}
+    extra_fields = {k: v for k, v in command_payload.items() if k not in reserved_fields}
+    for key in extra_fields:
+        command_payload.pop(key, None)
+    new_payload = {**extra_fields, **new_payload}
+    command_payload["payload"] = new_payload
+
     message = {
-        **payload,
+        **command_payload,
         "type": "device-command",
         "id": device_id,
         "requestId": request_id,
@@ -231,6 +242,8 @@ async def device_state(request: web.Request) -> web.Response:
 
     command_payload = {k: v for k, v in payload.items() if k not in {"id", "action"}}
     command_payload["command"] = "toggle" if payload.get("action") == "toggle" else "set-switch"
+    old_payload = command_payload.get("payload")
+    command_payload["payload"] = dict(old_payload) if isinstance(old_payload, dict) else {}
     command_payload.setdefault("source", "api-device-state")
 
     result = await dispatch_device_command(device_id, command_payload)
@@ -244,7 +257,7 @@ async def device_state(request: web.Request) -> web.Response:
 async def seed_sample(_: web.Request) -> web.Response:
     sample = {
         "id": "demo-switch-1",
-        "switchOn": False,
+        "payload": {"switchOn": False},
         "source": "server-seed",
         "updatedAt": utc_now_iso(),
     }

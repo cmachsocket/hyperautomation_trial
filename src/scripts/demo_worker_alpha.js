@@ -21,6 +21,7 @@ async function toggleByServer() {
       id: targetId,
       command: 'toggle',
       source: 'demo-worker-alpha',
+      payload: {},
     }),
   });
 
@@ -30,7 +31,7 @@ async function toggleByServer() {
     throw new Error(result.message || `HTTP ${response.status}`);
   }
 
-  const switchOn = result?.updated?.switchOn;
+  const switchOn = result?.updated?.payload?.switchOn;
 
   console.log(
     `alpha tick ${tick}: server toggled ${targetId}, switchOn=${switchOn}`

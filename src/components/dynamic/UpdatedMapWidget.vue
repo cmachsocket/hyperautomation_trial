@@ -11,7 +11,7 @@ let timer
 
 const demoSwitchState = computed(() => {
   const entry = data.value.entries.find((item) => item.id === demoSwitchId)
-  return Boolean(entry?.switchOn)
+  return Boolean(entry?.payload?.switchOn)
 })
 
 const upsertEntryFromServer = (id, updated, updatedAt) => {
@@ -61,10 +61,11 @@ const toggleDemoSwitch = async () => {
   error.value = ''
 
   try {
-    const payload = {
+    const commandRequest = {
       id: demoSwitchId,
-      action: 'toggle',
+      command: 'toggle',
       source: 'frontend-widget',
+      payload: {},
     }
 
     const response = await fetch(`${apiBase}/api/device/command`, {
@@ -72,11 +73,7 @@ const toggleDemoSwitch = async () => {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        id: payload.id,
-        command: 'toggle',
-        source: payload.source,
-      }),
+      body: JSON.stringify(commandRequest),
     })
 
     if (!response.ok) {
