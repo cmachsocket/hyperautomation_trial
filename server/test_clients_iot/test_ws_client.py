@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import random
+from datetime import datetime, timezone
 
 import websockets
 
@@ -50,10 +51,18 @@ async def run_client(
                     continue
 
                 command = data.get("command")
+                request_id = data.get("requestId")
                 command_payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+
+                if not isinstance(request_id, str) or not request_id:
+                    # device-state-report should carry the same requestId from device-command.
+                    continue
+
                 if command == "toggle":
                     switch_on = not switch_on
                 elif command == "set-switch":
+                    if "switchOn" not in command_payload:
+                        continue
                     switch_on = bool(command_payload.get("switchOn"))
                 else:
                     continue
@@ -64,7 +73,8 @@ async def run_client(
                     "client": client_name,
                     "status": "ok",
                     "source": "example-program",
-                    "requestId": data.get("requestId"),
+                    "requestId": request_id,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
                     "payload": {
                         "switchOn": switch_on,
                     },

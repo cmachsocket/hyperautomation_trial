@@ -262,11 +262,11 @@ async def auth_middleware(request: web.Request, handler):
 
 
 async def get_merged_map(request: web.Request) -> web.Response:
-    device_id = request.match_info.get("id") or request.query.get("id")
+    device_id = request.match_info.get("id")
     normalized_id = normalize_id(device_id)
 
     if normalized_id is None or not normalized_id.strip():
-        return json_response({"message": "id is required (path param or query param)"}, status=400)
+        return json_response({"message": "id is required (path param)"}, status=400)
 
     entry = merged_by_id.get(normalized_id)
     if entry is None:
@@ -494,7 +494,16 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
             }
             await broadcast(event)
 
-            await ws.send_json({"type": "ack", "id": device_id, "updated": updated})
+            await ws.send_json(
+                {
+                    "type": "ack",
+                    "id": device_id,
+                    "client": updated.get("client"),
+                    "seq": updated.get("seq"),
+                    "status": updated.get("status"),
+                    "payload": updated.get("payload") if isinstance(updated.get("payload"), dict) else {},
+                }
+            )
     finally:
         all_ws_clients.discard(ws)
         unregister_socket(ws)
@@ -508,7 +517,6 @@ def create_app() -> web.Application:
     app.router.add_route("OPTIONS", "/{tail:.*}", options_handler)
     app.router.add_get("/", ws_handler)
     app.router.add_post("/api/auth/login", auth_login)
-    app.router.add_get("/api/merged-map", get_merged_map)
     app.router.add_get("/api/merged-map/{id}", get_merged_map)
     app.router.add_get("/api/app-version", get_app_version)
     app.router.add_post("/api/app-version/publish", publish_app_version)
@@ -524,5 +532,5 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     print(f"WS server started on ws://localhost:{PORT}")
-    print(f"Map API ready at http://localhost:{PORT}/api/merged-map/{{id}} or /api/merged-map?id={{id}}")
+    print(f"Map API ready at http://localhost:{PORT}/api/merged-map/{{id}}")
     web.run_app(create_app(), port=PORT)
