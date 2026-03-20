@@ -62,8 +62,10 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 - It has a switch button; clicking sends `{ "id": "demo-switch-1", "action": "toggle" }` to `POST /api/device/command`.
 - The server returns latest state in `updated`; the page reads switch state from `updated.switchOn`.
 - The server also broadcasts a `state-updated` event for clients to receive.
-- If your server address is different, set `VITE_WS_SERVER_URL`, for example:
-	- `VITE_WS_SERVER_URL=http://127.0.0.1:9001 npm run dev`
+- If your server address is different, use Vite env vars:
+	- `VITE_API_BASE_URL=http://127.0.0.1:8081`
+	- `VITE_AI_BASE_URL=http://127.0.0.1:8082`
+	- `VITE_WS_URL=ws://127.0.0.1:8081`
 
 ## Script Control Page
 
@@ -79,4 +81,16 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 - 如果 AI 聊天出现 `HTTP 502`，通常是 AI 服务未启动。
 - 启动命令：`npm run ai:controller`
 - 一键同时启动 WS + AI：`npm run servers:start`
+
+## Android 打包（后端远程）
+
+- 首次安装依赖：`npm install`
+- 配置生产环境后端地址：编辑 `.env.production`
+- 构建并同步到 Android 工程：`npm run build:android`
+- 打开 Android Studio：`npm run cap:open:android`
+
+建议：
+
+- 生产环境优先使用 HTTPS + WSS。
+- 后端需要允许移动端来源的 CORS 和鉴权请求头。
 

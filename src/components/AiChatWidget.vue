@@ -1,7 +1,8 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 
-const AI_ENDPOINT = import.meta.env.VITE_AI_ENDPOINT ?? '/api/chat'
+const aiBase = (import.meta.env.VITE_AI_BASE_URL || import.meta.env.VITE_API_BASE_URL || '').trim()
+const AI_ENDPOINT = `${aiBase}/api/chat`
 
 const history = ref([])
 const input = ref('')

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -15,6 +18,10 @@ from script_controller import ScriptController
 
 PORT = int(os.getenv("WS_PORT", "8081"))
 ROOT_DIR = Path(__file__).resolve().parents[1]
+AUTH_USERNAME = os.getenv("APP_LOGIN_USERNAME", "admin").strip() or "admin"
+AUTH_PASSWORD = os.getenv("APP_LOGIN_PASSWORD", "123456")
+AUTH_TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "hyperautomation-dev-secret")
+AUTH_TOKEN_EXPIRE_SECONDS = int(os.getenv("AUTH_TOKEN_EXPIRE_SECONDS", "43200"))
 
 
 def load_default_app_version() -> str:
@@ -41,6 +48,52 @@ script_controller = ScriptController()
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _base64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _base64url_decode(encoded: str) -> bytes:
+    padding = "=" * (-len(encoded) % 4)
+    return base64.urlsafe_b64decode((encoded + padding).encode("ascii"))
+
+
+def sign_auth_token(username: str, expires_at: int) -> str:
+    payload_obj = {"u": username, "exp": expires_at}
+    payload_raw = json.dumps(payload_obj, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    payload_b64 = _base64url_encode(payload_raw)
+    signature = hmac.new(AUTH_TOKEN_SECRET.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload_b64}.{signature}"
+
+
+def verify_auth_token(token: str) -> dict[str, Any] | None:
+    try:
+        payload_b64, signature = token.split(".", 1)
+    except ValueError:
+        return None
+
+    expected_signature = hmac.new(
+        AUTH_TOKEN_SECRET.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_signature):
+        return None
+
+    try:
+        payload = json.loads(_base64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    username = payload.get("u")
+    expires_at = payload.get("exp")
+    if not isinstance(username, str) or not isinstance(expires_at, int):
+        return None
+    if expires_at <= int(datetime.now().timestamp()):
+        return None
+    return payload
 
 
 def normalize_id(value: Any) -> str | None:
@@ -81,7 +134,7 @@ def json_response(payload: Any, status: int = 200) -> web.Response:
         status=status,
         headers={
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
             "Cache-Control": "no-store",
         },
@@ -152,6 +205,60 @@ async def dispatch_device_command(device_id: str, command_request: dict[str, Any
 
 async def options_handler(_: web.Request) -> web.Response:
     return json_response({}, status=204)
+
+
+async def auth_login(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return json_response({"message": "Invalid JSON"}, status=400)
+
+    if not isinstance(payload, dict):
+        return json_response({"message": "Payload must be a JSON object"}, status=400)
+
+    username = payload.get("username")
+    password = payload.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return json_response({"message": "username and password are required"}, status=400)
+
+    if username.strip() != AUTH_USERNAME or password != AUTH_PASSWORD:
+        return json_response({"message": "Invalid username or password"}, status=401)
+
+    now_ts = int(datetime.now().timestamp())
+    expires_at = now_ts + AUTH_TOKEN_EXPIRE_SECONDS
+    token = sign_auth_token(AUTH_USERNAME, expires_at)
+    return json_response(
+        {
+            "token": token,
+            "tokenType": "Bearer",
+            "expiresAt": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(),
+            "username": AUTH_USERNAME,
+        }
+    )
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        return await handler(request)
+
+    if not request.path.startswith("/api/"):
+        return await handler(request)
+
+    if request.path == "/api/auth/login":
+        return await handler(request)
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return json_response({"message": "Unauthorized: missing bearer token"}, status=401)
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    claims = verify_auth_token(token)
+    if not claims:
+        return json_response({"message": "Unauthorized: invalid or expired token"}, status=401)
+
+    request["auth_claims"] = claims
+    return await handler(request)
 
 
 async def get_merged_map(request: web.Request) -> web.Response:
@@ -396,10 +503,11 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
 
 
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
 
     app.router.add_route("OPTIONS", "/{tail:.*}", options_handler)
     app.router.add_get("/", ws_handler)
+    app.router.add_post("/api/auth/login", auth_login)
     app.router.add_get("/api/merged-map", get_merged_map)
     app.router.add_get("/api/merged-map/{id}", get_merged_map)
     app.router.add_get("/api/app-version", get_app_version)

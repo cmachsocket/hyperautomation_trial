@@ -36,10 +36,12 @@ import { z } from "zod";
 import fs from "fs/promises";
 import path from "path";
 import http from "http";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 import OpenAI from "openai";
 
 const MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024;
+const AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET ?? "hyperautomation-dev-secret";
 
 const DANGEROUS_CODE_PATTERNS = [
   { regex: /\b(?:require|import)\s*\(?\s*["'](?:node:)?child_process["']\s*\)?/m, reason: "forbidden module: child_process" },
@@ -74,6 +76,65 @@ const ALLOWED_DIRS = {
   scripts: path.join(PROJECT_ROOT, "src", "scripts"),
   widgets: path.join(PROJECT_ROOT, "src", "components", "dynamic"),
 };
+
+function decodeBase64Url(input) {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, "base64").toString("utf-8");
+}
+
+function verifyAuthToken(token) {
+  const [payloadB64, signature] = token.split(".");
+  if (!payloadB64 || !signature) {
+    return null;
+  }
+
+  const expected = crypto
+    .createHmac("sha256", AUTH_TOKEN_SECRET)
+    .update(payloadB64)
+    .digest("hex");
+
+  if (signature !== expected) {
+    return null;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(decodeBase64Url(payloadB64));
+  } catch {
+    return null;
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const exp = payload.exp;
+  if (!Number.isInteger(exp) || exp <= Math.floor(Date.now() / 1000)) {
+    return null;
+  }
+
+  return payload;
+}
+
+function requireAuth(req, res) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    res.writeHead(401, { "Content-Type": "application/json", ...CORS_HEADERS });
+    res.end(JSON.stringify({ error: "Unauthorized: missing bearer token" }));
+    return null;
+  }
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  const claims = verifyAuthToken(token);
+  if (!claims) {
+    res.writeHead(401, { "Content-Type": "application/json", ...CORS_HEADERS });
+    res.end(JSON.stringify({ error: "Unauthorized: invalid or expired token" }));
+    return null;
+  }
+
+  return claims;
+}
 
 /** Resolve and validate a relative path is inside project root (read scope). */
 function assertReadablePath(relPath = ".") {
@@ -315,7 +376,7 @@ const SYSTEM_PROMPT = `这是一个超自动化项目，你的任务是为这个
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -336,6 +397,11 @@ function sseWrite(res, event, data) {
 }
 
 async function handleChat(req, res) {
+  const claims = requireAuth(req, res);
+  if (!claims) {
+    return;
+  }
+
   let body;
   try {
     body = await readBody(req);

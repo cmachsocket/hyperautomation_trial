@@ -81,6 +81,9 @@
 <script>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
+const wsBase = (import.meta.env.VITE_WS_URL || '').trim();
+
 export default {
   name: 'DeviceMonitor',
   
@@ -95,11 +98,11 @@ export default {
     },
     wsUrl: {
       type: String,
-      default: 'ws://localhost:8081'
+      default: wsBase || 'ws://localhost:8081'
     },
     apiUrl: {
       type: String,
-      default: 'http://localhost:8081'
+      default: apiBase || 'http://localhost:8081'
     },
     debugMode: {
       type: Boolean,

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
-const apiBase = import.meta.env.VITE_WS_SERVER_URL || ''
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
 const data = ref({ size: 0, entries: [], updatedAt: '' })
 const loading = ref(false)
 const updatingSwitch = ref(false)

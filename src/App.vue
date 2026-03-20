@@ -5,19 +5,23 @@ import ScriptControlPage from './components/ScriptControlPage.vue'
 
 const activePage = ref('chat')
 const AUTH_STORAGE_KEY = 'hyperautomation:auth-session'
-const DEMO_USERNAME = import.meta.env.VITE_LOGIN_USERNAME || 'admin'
-const DEMO_PASSWORD = import.meta.env.VITE_LOGIN_PASSWORD || '123456'
-const isAuthenticated = ref(localStorage.getItem(AUTH_STORAGE_KEY) === '1')
+const AUTH_TOKEN_STORAGE_KEY = 'hyperautomation:auth-token'
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const authBase = (import.meta.env.VITE_AUTH_BASE_URL || apiBase).trim()
+const AUTH_LOGIN_ENDPOINT = `${authBase}/api/auth/login`
+const isAuthenticated = ref(
+  localStorage.getItem(AUTH_STORAGE_KEY) === '1' && !!localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
+)
 const loginForm = reactive({ username: '', password: '' })
 const authLoading = ref(false)
 const authError = ref('')
-const apiBase = import.meta.env.VITE_WS_SERVER_URL || ''
-const currentAppVersion = import.meta.env.VITE_APP_VERSION || 'dev-local'
+const loginInfo = ref('')
+const currentAppVersion = 'local'
 const latestAppVersion = ref('')
-const isVersionCheckEnabled = import.meta.env.PROD
-const versionCheckIntervalMs = Number(import.meta.env.VITE_VERSION_CHECK_INTERVAL_MS || 30000)
-const autoReloadOnUpdate = import.meta.env.VITE_AUTO_RELOAD_ON_UPDATE !== 'false'
-const autoReloadDelayMs = Number(import.meta.env.VITE_AUTO_RELOAD_DELAY_MS || 1500)
+const isVersionCheckEnabled = true
+const versionCheckIntervalMs = 30000
+const autoReloadOnUpdate = true
+const autoReloadDelayMs = 1500
 const publishing = ref(false)
 const publishInfo = ref('')
 const publishError = ref('')
@@ -80,7 +84,7 @@ const getAsyncView = (path) => {
 }
 
 const checkLatestVersion = async () => {
-  if (!isVersionCheckEnabled) {
+  if (!isVersionCheckEnabled || !isAuthenticated.value) {
     return
   }
 
@@ -94,6 +98,9 @@ const checkLatestVersion = async () => {
     })
 
     if (!response.ok) {
+      if (response.status === 401) {
+        logout()
+      }
       return
     }
 
@@ -109,19 +116,42 @@ const checkLatestVersion = async () => {
 
 const submitLogin = async () => {
   authError.value = ''
+  loginInfo.value = ''
   authLoading.value = true
 
   const username = loginForm.username.trim()
   const password = loginForm.password
 
-  await new Promise((resolve) => setTimeout(resolve, 250))
+  try {
+    const response = await fetch(AUTH_LOGIN_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ username, password }),
+    })
 
-  if (username === DEMO_USERNAME && password === DEMO_PASSWORD) {
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('账号或密码错误')
+      }
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const payload = await response.json()
+    const token = typeof payload?.token === 'string' ? payload.token : ''
+    if (!token) {
+      throw new Error('登录响应缺少 token')
+    }
+
+    localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
     isAuthenticated.value = true
     localStorage.setItem(AUTH_STORAGE_KEY, '1')
+    loginInfo.value = typeof payload?.expiresAt === 'string' ? `登录成功，有效期至 ${payload.expiresAt}` : '登录成功'
     loginForm.password = ''
-  } else {
-    authError.value = '账号或密码错误'
+    void checkLatestVersion()
+  } catch (err) {
+    authError.value = err instanceof Error ? err.message : '登录失败'
   }
 
   authLoading.value = false
@@ -130,7 +160,9 @@ const submitLogin = async () => {
 const logout = () => {
   isAuthenticated.value = false
   localStorage.removeItem(AUTH_STORAGE_KEY)
+  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
   authError.value = ''
+  loginInfo.value = ''
 }
 
 const reloadPage = () => {
@@ -152,6 +184,9 @@ const publishVersion = async () => {
     })
 
     if (!response.ok) {
+      if (response.status === 401) {
+        logout()
+      }
       throw new Error(`HTTP ${response.status}`)
     }
 
@@ -231,9 +266,9 @@ onUnmounted(() => {
           {{ authLoading ? '登录中...' : '登录' }}
         </button>
       </form>
-
       <p v-if="authError" class="login-error">{{ authError }}</p>
-      <p class="login-tip">默认账号：{{ DEMO_USERNAME }}，默认密码：{{ DEMO_PASSWORD }}</p>
+      <p v-if="loginInfo" class="login-info">{{ loginInfo }}</p>
+      <p class="login-tip">请输入后端配置的账号密码（APP_LOGIN_USERNAME / APP_LOGIN_PASSWORD）</p>
     </section>
   </main>
 

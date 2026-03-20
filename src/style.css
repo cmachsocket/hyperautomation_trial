@@ -119,6 +119,11 @@ body {
   color: #fca5a5;
 }
 
+.login-info {
+  margin-top: 12px;
+  color: #86efac;
+}
+
 .login-tip {
   margin-top: 14px;
   font-size: 12px;
