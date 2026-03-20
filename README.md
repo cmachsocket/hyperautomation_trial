@@ -94,3 +94,14 @@ Production can use MicroPython with the same JSON message format (`id` + payload
 - 生产环境优先使用 HTTPS + WSS。
 - 后端需要允许移动端来源的 CORS 和鉴权请求头。
 
+## GitHub Actions（Tag 自动构建 Android）
+
+- 工作流文件：`.github/workflows/android-tag-build.yml`
+- 触发条件：push tag（例如 `v1.0.0`）
+- 产物：Debug APK（Actions Artifacts）
+
+示例：
+
+- 创建 tag：`git tag v1.0.0`
+- 推送 tag：`git push origin v1.0.0`
+
