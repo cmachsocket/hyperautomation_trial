@@ -26,6 +26,122 @@ body {
   gap: 20px;
 }
 
+.login-shell {
+  min-height: calc(100vh - 48px);
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 20% 20%, rgba(14, 165, 233, 0.2), transparent 45%),
+    radial-gradient(circle at 80% 0%, rgba(16, 185, 129, 0.18), transparent 40%),
+    linear-gradient(135deg, #0f172a 0%, #1e293b 48%, #111827 100%);
+  border-radius: 16px;
+  padding: 20px;
+}
+
+.login-card {
+  width: min(100%, 430px);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.86);
+  backdrop-filter: blur(6px);
+  border-radius: 14px;
+  padding: 24px;
+  color: #e2e8f0;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.42);
+}
+
+.login-card__brand {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #67e8f9;
+  margin-bottom: 10px;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.login-card p {
+  margin: 8px 0 0;
+  color: #cbd5e1;
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.login-form span {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.login-form input {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: rgba(30, 41, 59, 0.8);
+  color: #f8fafc;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.login-form input:focus {
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.22);
+}
+
+.login-form button {
+  margin-top: 4px;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 700;
+  color: #082f49;
+  background: linear-gradient(120deg, #67e8f9, #34d399);
+  cursor: pointer;
+}
+
+.login-form button:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
+.login-error {
+  margin-top: 12px;
+  color: #fca5a5;
+}
+
+.login-tip {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.logout-btn {
+  border: 1px solid #f87171;
+  background: #f87171;
+  color: #450a0a;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .header h1 {
   margin: 0 0 8px;
   font-size: 24px;
@@ -100,6 +216,15 @@ body {
 @media (max-width: 900px) {
   .panel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .header-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .logout-btn {
+    width: 100%;
   }
 }
 

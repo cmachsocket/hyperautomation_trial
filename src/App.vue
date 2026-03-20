@@ -4,6 +4,13 @@ import AiChatWidget from './components/AiChatWidget.vue'
 import ScriptControlPage from './components/ScriptControlPage.vue'
 
 const activePage = ref('chat')
+const AUTH_STORAGE_KEY = 'hyperautomation:auth-session'
+const DEMO_USERNAME = import.meta.env.VITE_LOGIN_USERNAME || 'admin'
+const DEMO_PASSWORD = import.meta.env.VITE_LOGIN_PASSWORD || '123456'
+const isAuthenticated = ref(localStorage.getItem(AUTH_STORAGE_KEY) === '1')
+const loginForm = reactive({ username: '', password: '' })
+const authLoading = ref(false)
+const authError = ref('')
 const apiBase = import.meta.env.VITE_WS_SERVER_URL || ''
 const currentAppVersion = import.meta.env.VITE_APP_VERSION || 'dev-local'
 const latestAppVersion = ref('')
@@ -100,6 +107,32 @@ const checkLatestVersion = async () => {
   }
 }
 
+const submitLogin = async () => {
+  authError.value = ''
+  authLoading.value = true
+
+  const username = loginForm.username.trim()
+  const password = loginForm.password
+
+  await new Promise((resolve) => setTimeout(resolve, 250))
+
+  if (username === DEMO_USERNAME && password === DEMO_PASSWORD) {
+    isAuthenticated.value = true
+    localStorage.setItem(AUTH_STORAGE_KEY, '1')
+    loginForm.password = ''
+  } else {
+    authError.value = '账号或密码错误'
+  }
+
+  authLoading.value = false
+}
+
+const logout = () => {
+  isAuthenticated.value = false
+  localStorage.removeItem(AUTH_STORAGE_KEY)
+  authError.value = ''
+}
+
 const reloadPage = () => {
   window.location.reload()
 }
@@ -177,10 +210,42 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="app-shell">
+  <main v-if="!isAuthenticated" class="login-shell">
+    <section class="login-card">
+      <div class="login-card__brand">HyperAutomation</div>
+      <h1>控制台登录</h1>
+      <p>登录后可使用 AI Chat、脚本控制和动态栏位。</p>
+
+      <form class="login-form" @submit.prevent="submitLogin">
+        <label>
+          <span>账号</span>
+          <input v-model="loginForm.username" type="text" autocomplete="username" placeholder="请输入账号" required />
+        </label>
+
+        <label>
+          <span>密码</span>
+          <input v-model="loginForm.password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
+        </label>
+
+        <button type="submit" :disabled="authLoading">
+          {{ authLoading ? '登录中...' : '登录' }}
+        </button>
+      </form>
+
+      <p v-if="authError" class="login-error">{{ authError }}</p>
+      <p class="login-tip">默认账号：{{ DEMO_USERNAME }}，默认密码：{{ DEMO_PASSWORD }}</p>
+    </section>
+  </main>
+
+  <main v-else class="app-shell">
     <header class="header">
-      <h1>多栏动态加载演示（Vue + HMR）</h1>
-      <p>每个栏位先是空白，选择一个组件或页面后会异步加载，并在开发模式下自动热更新。</p>
+      <div class="header-top">
+        <div>
+          <h1>多栏动态加载演示（Vue + HMR）</h1>
+          <p>每个栏位先是空白，选择一个组件或页面后会异步加载，并在开发模式下自动热更新。</p>
+        </div>
+        <button class="logout-btn" @click="logout">退出登录</button>
+      </div>
       <div class="publish-toolbar">
         <button @click="publishVersion" :disabled="publishing" class="publish-btn">
           {{ publishing ? '发布中...' : '发布' }}
