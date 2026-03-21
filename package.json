@@ -12,7 +12,6 @@
     "cap:sync:android": "npx cap sync android",
     "cap:open:android": "npx cap open android",
     "ws:server": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; python server/ws_server.py'",
-    "ws:server:node": "node server/ws-server.js",
     "ws:server:py": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; python server/ws_server.py'",
     "ai:controller": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; node server/ai_controller.js'",
     "servers:start": "bash server/start_servers.sh"
@@ -22,13 +21,13 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "openai": "^6.29.0",
     "vue": "^3.5.30",
-    "ws": "^8.18.3",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@capacitor/android": "^8.2.0",
     "@capacitor/cli": "^8.2.0",
     "@vitejs/plugin-vue": "^6.0.5",
-    "vite": "^8.0.0"
+    "vite": "^8.0.0",
+    "ws": "^8.19.0"
   }
 }
