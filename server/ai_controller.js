@@ -70,6 +70,7 @@ class SecurityValidationError extends Error {
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RESTRICTED_READ_PATHS = [
   path.join(PROJECT_ROOT, "local.env"),
+  path.join(PROJECT_ROOT, ".env.production"),
 ];
 
 const ALLOWED_DIRS = {

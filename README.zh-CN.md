@@ -1,3 +1,9 @@
+# Vue 3 + Vite
+
+这个模板可帮助你在 Vite 中快速开始 Vue 3 开发。模板使用 Vue 3 的 `<script setup>` 单文件组件（SFC）。更多说明请参考 [script setup 文档](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup)。
+
+关于 Vue 的 IDE 支持，请参考 [Vue 文档中的工具链章节](https://vuejs.org/guide/scaling-up/tooling.html#ide-support)。
+
 ## WebSocket 服务器
 
 - 安装依赖：`npm install`
@@ -15,9 +21,9 @@ Python 服务器依赖：
 
 ```json
 {
-	"id": "device-1",
-	"temperature": 25,
-	"status": "ok"
+  "id": "device-1",
+  "temperature": 25,
+  "status": "ok"
 }
 ```
 
@@ -39,9 +45,9 @@ Python 服务器依赖：
 - 安装依赖：`pip install websockets`
 - 运行示例：`python server/test_clients_iot/test_ws_client.py --clients 4 --messages 5`
 - 可选参数：
-	- `--url ws://localhost:8081`
-	- `--interval 0.5`
-	- `--listen-seconds 5`
+  - `--url ws://localhost:8081`
+  - `--interval 0.5`
+  - `--listen-seconds 5`
 
 该脚本支持并发收发（一个协程发送，另一个协程持续接收 ack/event）。
 它同时也是示例程序：接收服务端 `device-command` 后更新本地开关状态，再回传 `device-state-report`。
@@ -57,9 +63,9 @@ Python 服务器依赖：
 - 服务器会在 `updated` 字段返回最新状态，页面从 `updated.switchOn` 读取开关值。
 - 服务器也会广播 `state-updated` 事件供客户端接收。
 - 如果你的服务地址不同，请设置 Vite 环境变量：
-	- `VITE_API_BASE_URL=http://127.0.0.1:8081`
-	- `VITE_AI_BASE_URL=http://127.0.0.1:8082`
-	- `VITE_WS_URL=ws://127.0.0.1:8081`
+  - `VITE_API_BASE_URL=http://127.0.0.1:8081`
+  - `VITE_AI_BASE_URL=http://127.0.0.1:8082`
+  - `VITE_WS_URL=ws://127.0.0.1:8081`
 
 ## 脚本控制页
 
@@ -98,8 +104,3 @@ Python 服务器依赖：
 
 - 创建 tag：`git tag v1.0.0`
 - 推送 tag：`git push origin v1.0.0`
-
-## English
-
-For the English version, see [README.en.md](README.en.md).
-
