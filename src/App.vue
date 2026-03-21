@@ -9,6 +9,8 @@ const AUTH_TOKEN_STORAGE_KEY = 'hyperautomation:auth-token'
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
 const authBase = (import.meta.env.VITE_AUTH_BASE_URL || apiBase).trim()
 const AUTH_LOGIN_ENDPOINT = `${authBase}/api/auth/login`
+const isAuthEndpointConfigured = Boolean(authBase)
+const isAuthEndpointPlaceholder = /your-server\.example\.com/i.test(authBase)
 const isAuthenticated = ref(
   localStorage.getItem(AUTH_STORAGE_KEY) === '1' && !!localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
 )
@@ -83,6 +85,21 @@ const getAsyncView = (path) => {
   return defineAsyncComponent(moduleMap[path])
 }
 
+const parseJsonResponse = async (response, requestUrl, fallbackMessage) => {
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.toLowerCase().includes('application/json')) {
+    return response.json()
+  }
+
+  const raw = await response.text()
+  const preview = raw.slice(0, 120).replace(/\s+/g, ' ').trim()
+  throw new Error(
+    `${fallbackMessage}：接口返回了非 JSON 内容，请检查后端地址与路由。URL=${requestUrl}${
+      preview ? `，响应片段=${preview}` : ''
+    }`,
+  )
+}
+
 const checkLatestVersion = async () => {
   if (!isVersionCheckEnabled || !isAuthenticated.value) {
     return
@@ -119,6 +136,18 @@ const submitLogin = async () => {
   loginInfo.value = ''
   authLoading.value = true
 
+  if (!isAuthEndpointConfigured) {
+    authError.value = '未配置后端地址。请设置 VITE_AUTH_BASE_URL 或 VITE_API_BASE_URL 后重新构建 Android。'
+    authLoading.value = false
+    return
+  }
+
+  if (isAuthEndpointPlaceholder) {
+    authError.value = '当前后端地址仍是占位值 your-server.example.com，请先配置真实后端地址后再登录。'
+    authLoading.value = false
+    return
+  }
+
   const username = loginForm.username.trim()
   const password = loginForm.password
 
@@ -138,7 +167,7 @@ const submitLogin = async () => {
       throw new Error(`HTTP ${response.status}`)
     }
 
-    const payload = await response.json()
+    const payload = await parseJsonResponse(response, AUTH_LOGIN_ENDPOINT, '登录失败')
     const token = typeof payload?.token === 'string' ? payload.token : ''
     if (!token) {
       throw new Error('登录响应缺少 token')
