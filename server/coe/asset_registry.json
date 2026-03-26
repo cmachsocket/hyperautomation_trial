@@ -1,0 +1,134 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-03-26T13:23:58.539490+00:00",
+  "assets": [
+    {
+      "id": "VD-001",
+      "name": "Web Scraper Bot",
+      "type": "virtual_device",
+      "status": "planning",
+      "metadata": {
+        "owner": "alice",
+        "team": "iot",
+        "tags": [
+          "rpa",
+          "web"
+        ],
+        "description": "爬虫机器人",
+        "version": "1.0.0",
+        "created_at": "2026-03-26T13:23:58.536785+00:00",
+        "updated_at": "2026-03-26T13:23:58.536785+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {},
+      "bot_type": "playwright",
+      "entry_point": "",
+      "capabilities": [
+        "web_scrape"
+      ],
+      "input_schema": {},
+      "output_schema": {}
+    },
+    {
+      "id": "VD-002",
+      "name": "Email Handler Bot",
+      "type": "virtual_device",
+      "status": "planning",
+      "metadata": {
+        "owner": "bob",
+        "team": "iot",
+        "tags": [
+          "rpa",
+          "email"
+        ],
+        "description": "邮件机器人",
+        "version": "1.0.0",
+        "created_at": "2026-03-26T13:23:58.537604+00:00",
+        "updated_at": "2026-03-26T13:23:58.537604+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {},
+      "bot_type": "playwright",
+      "entry_point": "",
+      "capabilities": [
+        "email_fetch",
+        "email_send"
+      ],
+      "input_schema": {},
+      "output_schema": {}
+    },
+    {
+      "id": "SK-001",
+      "name": "AI Chat Skill",
+      "type": "ai_skill",
+      "status": "planning",
+      "metadata": {
+        "owner": "bob",
+        "team": "ai",
+        "tags": [
+          "llm",
+          "chat"
+        ],
+        "description": "对话技能",
+        "version": "1.0.0",
+        "created_at": "2026-03-26T13:23:58.538098+00:00",
+        "updated_at": "2026-03-26T13:23:58.538098+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {},
+      "model_provider": "openai",
+      "model_name": "gpt-4o",
+      "input_type": "text",
+      "output_type": "text",
+      "capabilities": [],
+      "call_count": 0,
+      "success_rate": 1.0
+    },
+    {
+      "id": "SC-001",
+      "name": "Demo Worker Alpha",
+      "type": "script",
+      "status": "planning",
+      "metadata": {
+        "owner": "system",
+        "team": "iot",
+        "tags": [
+          "demo"
+        ],
+        "description": "",
+        "version": "1.0.0",
+        "created_at": "2026-03-26T13:23:58.538648+00:00",
+        "updated_at": "2026-03-26T13:23:58.538648+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {},
+      "script_path": "src/scripts/demo_worker_alpha.js",
+      "language": "javascript",
+      "parameters": [],
+      "run_count": 0,
+      "avg_duration_ms": 0.0
+    },
+    {
+      "id": "PD-001",
+      "name": "Temperature Sensor 01",
+      "type": "physical_device",
+      "status": "planning",
+      "metadata": {
+        "owner": "system",
+        "team": "iot",
+        "tags": [
+          "sensor",
+          "temperature"
+        ],
+        "description": "温度传感器",
+        "version": "1.0.0",
+        "created_at": "2026-03-26T13:23:58.539170+00:00",
+        "updated_at": "2026-03-26T13:23:58.539170+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {},
+      "hardware_info": {},
+      "protocol": "ws"
+    }
+  ]
+}
