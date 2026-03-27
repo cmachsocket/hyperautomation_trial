@@ -216,8 +216,8 @@ async def sync_devices(request: Request) -> Response:
     if not device_manager:
         return error_response("device_manager not available", 500)
 
-    synced = registry.sync_from_device_manager(device_manager.merged_by_id)
-    return json_response({"synced": synced, "total": len(registry._assets)})
+    result = registry.sync_from_device_manager(device_manager.merged_by_id)
+    return json_response({**result, "total": len(registry._assets)})
 
 
 # ---- 辅助函数 ----

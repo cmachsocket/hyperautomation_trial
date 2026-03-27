@@ -155,7 +155,7 @@ def create_app(
     async def get_scripts(_: web.Request) -> web.Response:
         return build_json_response({"scripts": script_runner.list_scripts(), "updatedAt": utc_now_iso()})
 
-    async def get_app_version(_: web.Request) -> web.Response:
+    async def get_app_version_api(_: web.Request) -> web.Response:
         return build_json_response({"version": get_app_version(), "updatedAt": utc_now_iso()})
 
     async def publish_app_version(request: web.Request) -> web.Response:
@@ -390,7 +390,7 @@ def create_app(
     app.router.add_get("/", ws_handler)
     app.router.add_post("/api/auth/login", auth_login)
     app.router.add_get("/api/merged-map/{id}", get_merged_map)
-    app.router.add_get("/api/app-version", get_app_version)
+    app.router.add_get("/api/app-version", get_app_version_api)
     app.router.add_post("/api/app-version/publish", publish_app_version)
     app.router.add_get("/api/scripts", get_scripts)
     app.router.add_post("/api/scripts/start", scripts_start)

@@ -419,26 +419,32 @@ class AssetRegistry:
 
     # ---- 与 device_manager 同步 ----
 
-    def sync_from_device_manager(self, merged_by_id: dict) -> int:
+    def sync_from_device_manager(self, merged_by_id: dict) -> dict:
         """
-        从 device_manager.merged_by_id 同步设备资产。
+        从 device_manager.merged_by_id 自动同步设备资产。
+
+        - 设备已在资产库：只更新 runtime_state（状态刷新）
+        - 设备未在资产库：自动注册为 device 资产
+        - 资产库有但 device_manager 没有：从资产库移除（离线设备）
 
         Args:
             merged_by_id: device_manager.merged_by_id（dev_id → state_dict）
         Returns:
-            新增同步的设备数量。
+            {"added": int, "updated": int, "removed": int}
         """
-        synced = 0
+        added = updated = removed = 0
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 同步已有设备 + 新设备
         for dev_id, state in merged_by_id.items():
             if dev_id in self._assets:
                 self._assets[dev_id].runtime_state = state
+                updated += 1
             else:
-                # 从设备自身的 type 字段判断 physical / virtual
-                device_subtype: DeviceSubtype = "physical"
                 device_type = state.get("type", "generic")
-                if device_type in ("virtual", "rpa", "bot", "software"):
-                    device_subtype = "virtual"
-
+                device_subtype: DeviceSubtype = (
+                    "virtual" if device_type in ("virtual", "rpa", "bot", "software") else "physical"
+                )
                 self.register_asset(
                     asset_id=dev_id,
                     name=f"{dev_id} ({device_type})",
@@ -450,10 +456,19 @@ class AssetRegistry:
                         tags=["auto-synced", device_type],
                     ),
                 )
-                synced += 1
-        if synced > 0:
-            self._save()
-        return synced
+                added += 1
+
+        # 移除已离线的设备（device_manager 没有但资产库有的）
+        for dev_id in list(self._assets.keys()):
+            asset = self._assets[dev_id]
+            if asset.type == "device" and dev_id not in merged_by_id:
+                self._assets[dev_id].status = "deprecated"
+                self._assets[dev_id].metadata.updated_at = now
+                removed += 1
+
+        self._save()
+        logger.info("device_sync_completed", added=added, updated=updated, removed=removed)
+        return {"added": added, "updated": updated, "removed": removed}
 
 
 # ============================================================

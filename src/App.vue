@@ -8,8 +8,8 @@ const AUTH_STORAGE_KEY = 'hyperautomation:auth-session'
 const AUTH_TOKEN_STORAGE_KEY = 'hyperautomation:auth-token'
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
 const authBase = (import.meta.env.VITE_AUTH_BASE_URL || apiBase).trim()
-const AUTH_LOGIN_ENDPOINT = `${authBase}/api/auth/login`
-const isAuthEndpointConfigured = Boolean(authBase)
+const AUTH_LOGIN_ENDPOINT = authBase ? `${authBase}/api/auth/login` : '/api/auth/login'
+const isAuthEndpointConfigured = Boolean(authBase) || import.meta.env.DEV
 const isAuthEndpointPlaceholder = /your-server\.example\.com/i.test(authBase)
 const isAuthenticated = ref(
   localStorage.getItem(AUTH_STORAGE_KEY) === '1' && !!localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
