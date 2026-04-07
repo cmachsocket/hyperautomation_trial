@@ -157,61 +157,6 @@ body {
   opacity: 0.85;
 }
 
-.publish-toolbar {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.publish-btn {
-  border: 1px solid #10b981;
-  background: #10b981;
-  color: #052e16;
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.publish-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.publish-info {
-  color: #059669;
-  font-size: 14px;
-}
-
-.publish-error {
-  color: #ef4444;
-  font-size: 14px;
-}
-
-.update-banner {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid #f59e0b;
-  background: rgba(245, 158, 11, 0.15);
-  border-radius: 10px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.update-banner button {
-  border-radius: 8px;
-  border: 1px solid #f59e0b;
-  background: #f59e0b;
-  color: #111827;
-  font-weight: 600;
-  padding: 6px 10px;
-  cursor: pointer;
-}
-
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

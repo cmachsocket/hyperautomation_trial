@@ -81,8 +81,6 @@ def create_app(
     auth_password: str,
     auth_token_secret: str,
     auth_token_expire_seconds: int,
-    get_app_version: Callable[[], str],
-    set_app_version: Callable[[str], None],
     device_manager: DeviceManager,
     script_runner: ScriptRunner,
 ) -> web.Application:
@@ -156,34 +154,6 @@ def create_app(
 
     async def get_scripts(_: web.Request) -> web.Response:
         return build_json_response({"scripts": script_runner.list_scripts(), "updatedAt": utc_now_iso()})
-
-    async def get_app_version_api(_: web.Request) -> web.Response:
-        return build_json_response({"version": get_app_version(), "updatedAt": utc_now_iso()})
-
-    async def publish_app_version(request: web.Request) -> web.Response:
-        payload: dict[str, Any] = {}
-        if request.can_read_body:
-            try:
-                maybe_payload = await request.json()
-                if isinstance(maybe_payload, dict):
-                    payload = maybe_payload
-            except Exception:
-                return build_json_response({"message": "Invalid JSON"}, status=400)
-
-        requested_version = payload.get("version") if isinstance(payload, dict) else None
-        if requested_version is not None and not isinstance(requested_version, str):
-            return build_json_response({"message": "version must be a string"}, status=400)
-
-        next_version = (requested_version or "").strip() or f"release-{int(datetime.now().timestamp())}"
-        set_app_version(next_version)
-
-        event = {
-            "type": "app-version-published",
-            "version": get_app_version(),
-            "updatedAt": utc_now_iso(),
-        }
-        await device_manager.broadcast(event)
-        return build_json_response(event)
 
     async def scripts_start(request: web.Request) -> web.Response:
         try:
@@ -394,8 +364,6 @@ def create_app(
     app.router.add_get("/", ws_handler)
     app.router.add_post("/api/auth/login", auth_login)
     app.router.add_get("/api/merged-map/{id}", get_merged_map)
-    app.router.add_get("/api/app-version", get_app_version_api)
-    app.router.add_post("/api/app-version/publish", publish_app_version)
     app.router.add_get("/api/scripts", get_scripts)
     app.router.add_post("/api/scripts/start", scripts_start)
     app.router.add_post("/api/scripts/stop", scripts_stop)

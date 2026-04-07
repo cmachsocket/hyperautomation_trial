@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, reactive, ref } from 'vue'
 import AiController from './components/ai_controller.vue'
 import ScriptControlPage from './components/ScriptControlPage.vue'
 
@@ -18,17 +18,6 @@ const loginForm = reactive({ username: '', password: '' })
 const authLoading = ref(false)
 const authError = ref('')
 const loginInfo = ref('')
-const currentAppVersion = 'local'
-const latestAppVersion = ref('')
-const isVersionCheckEnabled = true
-const versionCheckIntervalMs = 30000
-const autoReloadOnUpdate = true
-const autoReloadDelayMs = 1500
-const publishing = ref(false)
-const publishInfo = ref('')
-const publishError = ref('')
-let versionTimer
-let reloadTimer
 
 const componentModules = import.meta.glob('./components/dynamic/**/*.vue')
 
@@ -49,10 +38,6 @@ const options = computed(() => {
   }))
 
   return componentOptions
-})
-
-const hasUpdate = computed(() => {
-  return isVersionCheckEnabled && !!latestAppVersion.value && latestAppVersion.value !== currentAppVersion
 })
 
 const createPanel = (id, slotName, selectedPath = '') => ({
@@ -98,37 +83,6 @@ const parseJsonResponse = async (response, requestUrl, fallbackMessage) => {
       preview ? `，响应片段=${preview}` : ''
     }`,
   )
-}
-
-const checkLatestVersion = async () => {
-  if (!isVersionCheckEnabled || !isAuthenticated.value) {
-    return
-  }
-
-  try {
-    const response = await fetch(`${apiBase}/api/app-version`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache',
-      },
-    })
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        logout()
-      }
-      return
-    }
-
-    const result = await response.json()
-    const version = typeof result?.version === 'string' ? result.version.trim() : ''
-    if (version) {
-      latestAppVersion.value = version
-    }
-  } catch {
-    // 忽略检测失败，避免影响页面主体功能
-  }
 }
 
 const submitLogin = async () => {
@@ -178,7 +132,6 @@ const submitLogin = async () => {
     localStorage.setItem(AUTH_STORAGE_KEY, '1')
     loginInfo.value = typeof payload?.expiresAt === 'string' ? `登录成功，有效期至 ${payload.expiresAt}` : '登录成功'
     loginForm.password = ''
-    void checkLatestVersion()
   } catch (err) {
     authError.value = err instanceof Error ? err.message : '登录失败'
   }
@@ -193,84 +146,6 @@ const logout = () => {
   authError.value = ''
   loginInfo.value = ''
 }
-
-const reloadPage = () => {
-  window.location.reload()
-}
-
-const publishVersion = async () => {
-  publishing.value = true
-  publishError.value = ''
-  publishInfo.value = ''
-
-  try {
-    const response = await fetch(`${apiBase}/api/app-version/publish`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({}),
-    })
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        logout()
-      }
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const result = await response.json()
-    const version = typeof result?.version === 'string' ? result.version.trim() : ''
-    if (version) {
-      latestAppVersion.value = version
-      publishInfo.value = `已发布版本：${version}`
-    } else {
-      publishInfo.value = '发布已触发'
-    }
-  } catch (error) {
-    publishError.value = error instanceof Error ? error.message : '发布失败'
-  } finally {
-    publishing.value = false
-  }
-}
-
-watch(hasUpdate, (nextHasUpdate) => {
-  if (!nextHasUpdate || !autoReloadOnUpdate || reloadTimer) {
-    return
-  }
-
-  const markerKey = 'app:last-auto-reloaded-version'
-  if (sessionStorage.getItem(markerKey) === latestAppVersion.value) {
-    return
-  }
-
-  sessionStorage.setItem(markerKey, latestAppVersion.value)
-
-  reloadTimer = setTimeout(() => {
-    reloadPage()
-  }, Number.isFinite(autoReloadDelayMs) && autoReloadDelayMs >= 0 ? autoReloadDelayMs : 1500)
-})
-
-onMounted(() => {
-  if (!isVersionCheckEnabled) {
-    return
-  }
-
-  void checkLatestVersion()
-  versionTimer = setInterval(
-    checkLatestVersion,
-    Number.isFinite(versionCheckIntervalMs) && versionCheckIntervalMs > 0 ? versionCheckIntervalMs : 30000,
-  )
-})
-
-onUnmounted(() => {
-  if (versionTimer) {
-    clearInterval(versionTimer)
-  }
-  if (reloadTimer) {
-    clearTimeout(reloadTimer)
-  }
-})
 </script>
 
 <template>
@@ -309,20 +184,6 @@ onUnmounted(() => {
           <p>每个栏位先是空白，选择一个组件或页面后会异步加载，并在开发模式下自动热更新。</p>
         </div>
         <button class="logout-btn" @click="logout">退出登录</button>
-      </div>
-      <div class="publish-toolbar">
-        <button @click="publishVersion" :disabled="publishing" class="publish-btn">
-          {{ publishing ? '发布中...' : '发布' }}
-        </button>
-        <span v-if="publishInfo" class="publish-info">{{ publishInfo }}</span>
-        <span v-if="publishError" class="publish-error">发布失败：{{ publishError }}</span>
-      </div>
-      <div v-if="hasUpdate" class="update-banner">
-        <span>
-          检测到新版本（当前 {{ currentAppVersion }}，最新 {{ latestAppVersion }}）
-          {{ autoReloadOnUpdate ? '，页面将自动刷新' : '' }}
-        </span>
-        <button @click="reloadPage">立即刷新</button>
       </div>
     </header>
 
