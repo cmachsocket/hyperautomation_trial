@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any
-
-from aiohttp import web
+from typing import Any, cast
 
 
 def utc_now_iso() -> str:
@@ -22,10 +21,11 @@ def normalize_id(value: Any) -> str | None:
 class DeviceManager:
     def __init__(self) -> None:
         self.merged_by_id: dict[str, dict[str, Any]] = {}
-        self.device_sockets: dict[str, set[web.WebSocketResponse]] = {}
-        self.socket_devices: dict[web.WebSocketResponse, set[str]] = {}
+        self.device_sockets: dict[str, set[int]] = {}
+        self.socket_devices: dict[int, set[str]] = {}
+        self.connections: dict[int, Any] = {}
         self.pending_commands: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self.all_ws_clients: set[web.WebSocketResponse] = set()
+        self.all_ws_clients: set[int] = set()
 
     def set_by_id(self, payload: dict[str, Any]) -> dict[str, Any]:
         normalized_id = normalize_id(payload.get("id"))
@@ -36,49 +36,79 @@ class DeviceManager:
         self.merged_by_id[normalized_id] = stored
         return stored
 
-    def register_socket_for_device(self, ws: web.WebSocketResponse, device_id: str) -> None:
-        self.device_sockets.setdefault(device_id, set()).add(ws)
-        self.socket_devices.setdefault(ws, set()).add(device_id)
+    def register_connection(self, ws: Any) -> int:
+        connection_id = id(ws)
+        self.connections[connection_id] = ws
+        self.all_ws_clients.add(connection_id)
+        return connection_id
 
-    def unregister_socket(self, ws: web.WebSocketResponse) -> None:
-        ids = self.socket_devices.pop(ws, set())
+    def register_socket_for_device(self, ws: Any, device_id: str) -> None:
+        connection_id = self.register_connection(ws)
+        self.device_sockets.setdefault(device_id, set()).add(connection_id)
+        self.socket_devices.setdefault(connection_id, set()).add(device_id)
+
+    def unregister_socket(self, ws: Any) -> None:
+        connection_id = id(ws)
+        self.all_ws_clients.discard(connection_id)
+        self.connections.pop(connection_id, None)
+
+        ids = self.socket_devices.pop(connection_id, set())
         for device_id in ids:
             sockets = self.device_sockets.get(device_id)
             if not sockets:
                 continue
-            sockets.discard(ws)
+            sockets.discard(connection_id)
             if not sockets:
                 self.device_sockets.pop(device_id, None)
+
+    async def send_json(self, ws: Any, payload: dict[str, Any]) -> None:
+        text = json.dumps(payload, ensure_ascii=False)
+        sender = getattr(ws, "send", None)
+        if callable(sender):
+            send_result = sender(text)
+            if inspect.isawaitable(send_result):
+                await cast(Any, send_result)
+            return
+
+        sender = getattr(ws, "send_str", None)
+        if callable(sender):
+            send_result = sender(text)
+            if inspect.isawaitable(send_result):
+                await cast(Any, send_result)
+            return
+
+        raise RuntimeError("websocket object does not support send()")
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
         if not self.all_ws_clients:
             return
 
-        text = json.dumps(payload, ensure_ascii=False)
-        dead: list[web.WebSocketResponse] = []
-
-        for client in self.all_ws_clients:
-            if client.closed:
-                dead.append(client)
+        dead: list[int] = []
+        for connection_id in list(self.all_ws_clients):
+            ws = self.connections.get(connection_id)
+            if ws is None:
+                dead.append(connection_id)
                 continue
             try:
-                await client.send_str(text)
+                await self.send_json(ws, payload)
             except Exception:
-                dead.append(client)
+                dead.append(connection_id)
 
-        for client in dead:
-            self.all_ws_clients.discard(client)
-            self.unregister_socket(client)
+        for connection_id in dead:
+            ws = self.connections.pop(connection_id, None)
+            if ws is not None:
+                self.unregister_socket(ws)
 
     async def dispatch_device_command(self, device_id: str, command_request: dict[str, Any]) -> dict[str, Any]:
         sockets = self.device_sockets.get(device_id)
         if not sockets:
             return {"ok": False, "statusCode": 404, "message": "Target device is not connected"}
 
-        target = next((ws for ws in sockets if not ws.closed), None)
-        if not target:
+        target_id = next((connection_id for connection_id in sockets if connection_id in self.connections), None)
+        if target_id is None:
             return {"ok": False, "statusCode": 409, "message": "Target device connection is not writable"}
 
+        target = self.connections[target_id]
         request_id = f"{int(datetime.now().timestamp() * 1000)}-{uuid.uuid4().hex[:8]}"
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.pending_commands[request_id] = future
@@ -101,7 +131,12 @@ class DeviceManager:
             "requestId": request_id,
         }
 
-        await target.send_str(json.dumps(message, ensure_ascii=False))
+        try:
+            await self.send_json(target, message)
+        except Exception:
+            self.pending_commands.pop(request_id, None)
+            self.unregister_socket(target)
+            return {"ok": False, "statusCode": 409, "message": "Target device connection is not writable"}
 
         try:
             result = await asyncio.wait_for(future, timeout=5)

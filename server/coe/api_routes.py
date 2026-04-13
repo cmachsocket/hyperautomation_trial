@@ -7,33 +7,42 @@
 from __future__ import annotations
 
 import json
-from aiohttp import web
-from aiohttp.web import Request, Response
-from .asset_registry import (
-    AssetRegistry, AssetType, AssetStatus, LifecyclePhase,
-    get_registry, AssetEncoder
-)
+
 import structlog
+from quart import Blueprint, Response, current_app, request
+
+from .asset_registry import AssetEncoder, AssetRegistry, AssetStatus, AssetType, LifecyclePhase, get_registry
 
 logger = structlog.get_logger(__name__)
 
-routes = web.RouteTableDef()
-
+bp = Blueprint("coe_assets", __name__)
 
 VALID_ASSET_TYPES: tuple[AssetType, ...] = ("device", "workflow", "ai_skill", "script")
 VALID_ASSET_STATUS: tuple[AssetStatus, ...] = (
-    "planning", "development", "testing", "staging", "production", "deprecated", "archived"
+    "planning",
+    "development",
+    "testing",
+    "staging",
+    "production",
+    "deprecated",
+    "archived",
 )
 VALID_LIFECYCLE_PHASES: tuple[LifecyclePhase, ...] = (
-    "discovery", "development", "testing", "staging", "production", "deprecation", "archived"
+    "discovery",
+    "development",
+    "testing",
+    "staging",
+    "production",
+    "deprecation",
+    "archived",
 )
 
 
 def json_response(data: dict, status: int = 200) -> Response:
     return Response(
-        text=json.dumps(data, ensure_ascii=False, cls=AssetEncoder),
+        json.dumps(data, ensure_ascii=False, cls=AssetEncoder),
+        status=status,
         content_type="application/json",
-        status=status
     )
 
 
@@ -41,21 +50,23 @@ def error_response(message: str, status: int = 400) -> Response:
     return json_response({"error": message}, status)
 
 
-# ---- 列表 & 摘要 ----
+def _registry() -> AssetRegistry:
+    return current_app.config["asset_registry"]
 
-@routes.get("/api/coe/assets")
-async def list_assets(request: Request) -> Response:
+
+@bp.route("/api/coe/assets", methods=["GET"])
+async def list_assets() -> Response:
     """GET /api/coe/assets?type=&status=&owner=&tag=&summary=1"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    summary_only = request.query.get("summary") == "1"
+    registry = _registry()
+    summary_only = request.args.get("summary") == "1"
 
     if summary_only:
         return json_response(registry.summary())
 
-    asset_type_query = request.query.get("type") or None
-    status_query = request.query.get("status") or None
-    owner = request.query.get("owner") or None
-    tag = request.query.get("tag") or None
+    asset_type_query = request.args.get("type") or None
+    status_query = request.args.get("status") or None
+    owner = request.args.get("owner") or None
+    tag = request.args.get("tag") or None
 
     if asset_type_query and asset_type_query not in VALID_ASSET_TYPES:
         return error_response(f"Invalid type: {asset_type_query}")
@@ -76,44 +87,39 @@ async def list_assets(request: Request) -> Response:
         if has_filters
         else list(registry._assets.values())
     )
-    return json_response({
-        "total": len(assets),
-        "assets": [a.to_dict() for a in assets]
-    })
+    return json_response({"total": len(assets), "assets": [a.to_dict() for a in assets]})
 
 
-@routes.get("/api/coe/assets/summary")
-async def asset_summary(request: Request) -> Response:
+@bp.route("/api/coe/assets/summary", methods=["GET"])
+async def asset_summary() -> Response:
     """GET /api/coe/assets/summary — 统计摘要"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    return json_response(registry.summary())
+    return json_response(_registry().summary())
 
 
-# ---- 单个资产 ----
-
-@routes.get("/api/coe/assets/{asset_id}")
-async def get_asset(request: Request) -> Response:
+@bp.route("/api/coe/assets/<asset_id>", methods=["GET"])
+async def get_asset(asset_id: str) -> Response:
     """GET /api/coe/assets/{asset_id}"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    asset = registry.get_asset(request.match_info["asset_id"])
+    asset = _registry().get_asset(asset_id)
     if not asset:
         return error_response("Asset not found", 404)
     return json_response(asset.to_dict())
 
 
-@routes.patch("/api/coe/assets/{asset_id}")
-async def update_asset(request: Request) -> Response:
+@bp.route("/api/coe/assets/<asset_id>", methods=["PATCH"])
+async def update_asset(asset_id: str) -> Response:
     """PATCH /api/coe/assets/{asset_id} — 部分更新"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    asset_id = request.match_info["asset_id"]
+    registry = _registry()
     asset = registry.get_asset(asset_id)
     if not asset:
         return error_response("Asset not found", 404)
 
     try:
-        body = await request.json()
-    except json.JSONDecodeError:
+        body = await request.get_json()
+    except Exception:
         return error_response("Invalid JSON body")
+
+    if not isinstance(body, dict):
+        return error_response("JSON body must be an object")
 
     if "name" in body:
         asset.name = body["name"]
@@ -122,56 +128,50 @@ async def update_asset(request: Request) -> Response:
         if new_status not in VALID_ASSET_STATUS:
             return error_response(f"Invalid status: {new_status}")
         registry.update_status(asset_id, new_status)
-    if "metadata" in body:
-        for k, v in body["metadata"].items():
-            if hasattr(asset.metadata, k):
-                setattr(asset.metadata, k, v)
-    if "runtime_state" in body:
+    if "metadata" in body and isinstance(body["metadata"], dict):
+        for key, value in body["metadata"].items():
+            if hasattr(asset.metadata, key):
+                setattr(asset.metadata, key, value)
+    if "runtime_state" in body and isinstance(body["runtime_state"], dict):
         asset.runtime_state.update(body["runtime_state"])
 
     registry._save()
     return json_response(asset.to_dict())
 
 
-@routes.delete("/api/coe/assets/{asset_id}")
-async def delete_asset(request: Request) -> Response:
+@bp.route("/api/coe/assets/<asset_id>", methods=["DELETE"])
+async def delete_asset(asset_id: str) -> Response:
     """DELETE /api/coe/assets/{asset_id} — 软删除（归档）"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    asset_id = request.match_info["asset_id"]
-    success = registry.unregister_asset(asset_id)
+    success = _registry().unregister_asset(asset_id)
     if not success:
         return error_response("Asset not found", 404)
     return json_response({"status": "archived", "asset_id": asset_id})
 
 
-# ---- 生命周期 ----
-
-@routes.get("/api/coe/assets/{asset_id}/lifecycle")
-async def get_lifecycle(request: Request) -> Response:
+@bp.route("/api/coe/assets/<asset_id>/lifecycle", methods=["GET"])
+async def get_lifecycle(asset_id: str) -> Response:
     """GET /api/coe/assets/{asset_id}/lifecycle — 获取生命周期状态和可推进阶段"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    asset_id = request.match_info["asset_id"]
-    lifecycle = registry.get_lifecycle_info(asset_id)
+    lifecycle = _registry().get_lifecycle_info(asset_id)
     if not lifecycle:
         return error_response("Asset not found", 404)
     return json_response(lifecycle)
 
-@routes.post("/api/coe/assets/{asset_id}/lifecycle")
-async def advance_lifecycle(request: Request) -> Response:
+
+@bp.route("/api/coe/assets/<asset_id>/lifecycle", methods=["POST"])
+async def advance_lifecycle(asset_id: str) -> Response:
     """POST /api/coe/assets/{asset_id}/lifecycle — 推进生命周期阶段
 
     Body: {"phase": "testing"} 或 {"action": "next"}
     // discovery | development | testing | staging | production | deprecation | archived
     """
-    registry: AssetRegistry = request.app["asset_registry"]
-    asset_id = request.match_info["asset_id"]
+    registry = _registry()
     asset = registry.get_asset(asset_id)
     if not asset:
         return error_response("Asset not found", 404)
 
     try:
-        body = await request.json()
-    except json.JSONDecodeError:
+        body = await request.get_json()
+    except Exception:
         return error_response("Invalid JSON body")
 
     if not isinstance(body, dict):
@@ -185,11 +185,13 @@ async def advance_lifecycle(request: Request) -> Response:
         asset = registry.get_asset(asset_id)
         if not asset or not updated_lifecycle:
             return error_response("Asset not found", 404)
-        return json_response({
-            "asset": asset.to_dict(),
-            "lifecycle": updated_lifecycle,
-            "advanced_to": next_phase,
-        })
+        return json_response(
+            {
+                "asset": asset.to_dict(),
+                "lifecycle": updated_lifecycle,
+                "advanced_to": next_phase,
+            }
+        )
 
     phase = body.get("phase")
     if not phase:
@@ -204,38 +206,34 @@ async def advance_lifecycle(request: Request) -> Response:
     if not asset:
         return error_response("Asset not found", 404)
     lifecycle = registry.get_lifecycle_info(asset_id)
-    return json_response({
-        "asset": asset.to_dict(),
-        "lifecycle": lifecycle,
-        "advanced_to": phase,
-    })
+    return json_response(
+        {
+            "asset": asset.to_dict(),
+            "lifecycle": lifecycle,
+            "advanced_to": phase,
+        }
+    )
 
 
-# ---- 运行时状态 ----
-
-@routes.put("/api/coe/assets/{asset_id}/runtime")
-async def update_runtime_state(request: Request) -> Response:
+@bp.route("/api/coe/assets/<asset_id>/runtime", methods=["PUT"])
+async def update_runtime_state(asset_id: str) -> Response:
     """PUT /api/coe/assets/{asset_id}/runtime — 更新运行时状态"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    asset_id = request.match_info["asset_id"]
     try:
-        body = await request.json()
-    except json.JSONDecodeError:
+        body = await request.get_json()
+    except Exception:
         return error_response("Invalid JSON body")
 
-    success = registry.update_runtime_state(asset_id, body)
+    success = _registry().update_runtime_state(asset_id, body)
     if not success:
         return error_response("Asset not found", 404)
     return json_response({"status": "ok", "asset_id": asset_id})
 
 
-# ---- 同步物理设备 ----
-
-@routes.post("/api/coe/assets/sync/devices")
-async def sync_devices(request: Request) -> Response:
+@bp.route("/api/coe/assets/sync/devices", methods=["POST"])
+async def sync_devices() -> Response:
     """POST /api/coe/assets/sync/devices — 从 device_manager 同步物理设备"""
-    registry: AssetRegistry = request.app["asset_registry"]
-    device_manager = request.app.get("device_manager")
+    registry = _registry()
+    device_manager = current_app.config.get("device_manager")
     if not device_manager:
         return error_response("device_manager not available", 500)
 
@@ -243,8 +241,8 @@ async def sync_devices(request: Request) -> Response:
     return json_response({**result, "total": len(registry._assets)})
 
 
-@routes.post("/api/coe/assets/sync/scripts")
-async def sync_scripts(request: Request) -> Response:
+@bp.route("/api/coe/assets/sync/scripts", methods=["POST"])
+async def sync_scripts() -> Response:
     """POST /api/coe/assets/sync/scripts — 从 src/scripts 同步脚本资产
 
     Body (optional):
@@ -255,10 +253,10 @@ async def sync_scripts(request: Request) -> Response:
             "extensions": [".js", ".ts", ".py", ".sh"]
     }
     """
-    registry: AssetRegistry = request.app["asset_registry"]
+    registry = _registry()
     try:
-        body = await request.json() if request.can_read_body else {}
-    except json.JSONDecodeError:
+        body = await request.get_json(silent=True) or {}
+    except Exception:
         return error_response("Invalid JSON body")
 
     if not isinstance(body, dict):
@@ -291,11 +289,9 @@ async def sync_scripts(request: Request) -> Response:
     return json_response({**result, "total": len(registry._assets)})
 
 
-# ---- 辅助函数 ----
-
-def setup_asset_routes(app: web.Application):
-    """将资产库路由注册到 aiohttp app"""
+def setup_asset_routes(app):
+    """将资产库路由注册到 Quart app"""
     registry = get_registry()
-    app["asset_registry"] = registry
-    app.router.add_routes(routes)
+    app.config["asset_registry"] = registry
+    app.register_blueprint(bp)
     logger.info("asset_registry_routes_mounted")

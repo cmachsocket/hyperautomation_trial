@@ -35,9 +35,10 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-from aiohttp import web
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from quart import Quart, Response, request
+
 from server.env_loader import load_env_files
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -217,11 +218,16 @@ def verify_auth_token(token: str) -> dict[str, Any] | None:
     return payload
 
 
-def json_response(payload: Any, status: int = 200) -> web.Response:
-    return web.json_response(payload, status=status, headers={**CORS_HEADERS})
+def json_response(payload: Any, status: int = 200) -> Response:
+    return Response(
+        json.dumps(payload, ensure_ascii=False),
+        status=status,
+        content_type="application/json",
+        headers={**CORS_HEADERS},
+    )
 
 
-def require_auth(request: web.Request) -> dict[str, Any] | None:
+def require_auth() -> dict[str, Any] | None:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return None
@@ -384,13 +390,16 @@ def _get_value(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-async def handle_chat(request: web.Request) -> web.StreamResponse:
-    claims = require_auth(request)
+async def handle_chat() -> Response:
+    if request.method == "OPTIONS":
+        return Response(status=204, headers={**CORS_HEADERS})
+
+    claims = require_auth()
     if not claims:
         return json_response({"error": "Unauthorized: invalid or expired token"}, status=401)
 
     try:
-        body = await request.json()
+        body = await request.get_json()
     except Exception:
         return json_response({"error": "Invalid JSON body"}, status=400)
 
@@ -409,21 +418,11 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             ):
                 safe_history.append({"role": item["role"], "content": item["content"]})
 
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            **CORS_HEADERS,
-        },
-    )
-    await response.prepare(request)
-
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        await response.write(
-            sse_bytes(
+
+    async def event_stream():
+        if not api_key:
+            yield sse_bytes(
                 "error",
                 {
                     "message": (
@@ -432,78 +431,75 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                     )
                 },
             )
+            yield sse_bytes("done", {})
+            return
+
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         )
-        await response.write(sse_bytes("done", {}))
-        await response.write_eof()
-        return response
+        model = os.getenv("AI_MODEL", "gpt-4o-mini")
 
-    client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    )
-    model = os.getenv("AI_MODEL", "gpt-4o-mini")
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *safe_history,
+            {"role": "user", "content": user_message.strip()},
+        ]
+        tool_call_rounds = 0
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        *safe_history,
-        {"role": "user", "content": user_message.strip()},
-    ]
-    tool_call_rounds = 0
+        try:
+            while True:
+                stream = await client.chat.completions.create(
+                    model=model,
+                    messages=cast(list[ChatCompletionMessageParam], messages),
+                    tools=cast(list[ChatCompletionToolParam], LLM_TOOLS),
+                    stream=True,
+                )
 
-    try:
-        while True:
-            stream = await client.chat.completions.create(
-                model=model,
-                messages=cast(list[ChatCompletionMessageParam], messages),
-                tools=cast(list[ChatCompletionToolParam], LLM_TOOLS),
-                stream=True,
-            )
+                assistant_content = ""
+                tool_calls_accum: dict[int, dict[str, str]] = {}
 
-            assistant_content = ""
-            tool_calls_accum: dict[int, dict[str, str]] = {}
+                async for chunk in stream:
+                    delta = _chunk_delta(chunk)
+                    if delta is None:
+                        continue
 
-            async for chunk in stream:
-                delta = _chunk_delta(chunk)
-                if delta is None:
-                    continue
+                    content = _get_value(delta, "content")
+                    if isinstance(content, str) and content:
+                        assistant_content += content
+                        yield sse_bytes("token", {"text": content})
 
-                content = _get_value(delta, "content")
-                if isinstance(content, str) and content:
-                    assistant_content += content
-                    await response.write(sse_bytes("token", {"text": content}))
+                    tool_calls = _get_value(delta, "tool_calls")
+                    if not tool_calls:
+                        continue
 
-                tool_calls = _get_value(delta, "tool_calls")
+                    for tool_call in tool_calls:
+                        idx = _get_value(tool_call, "index", 0)
+                        if idx not in tool_calls_accum:
+                            tool_calls_accum[idx] = {"id": "", "name": "", "arguments": ""}
+
+                        tc_id = _get_value(tool_call, "id")
+                        if isinstance(tc_id, str) and tc_id:
+                            tool_calls_accum[idx]["id"] = tc_id
+
+                        fn = _get_value(tool_call, "function", {})
+                        fn_name = _get_value(fn, "name")
+                        if isinstance(fn_name, str) and fn_name:
+                            tool_calls_accum[idx]["name"] = fn_name
+
+                        fn_arguments = _get_value(fn, "arguments")
+                        if isinstance(fn_arguments, str) and fn_arguments:
+                            tool_calls_accum[idx]["arguments"] += fn_arguments
+
+                tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
+
                 if not tool_calls:
-                    continue
+                    messages.append({"role": "assistant", "content": assistant_content})
+                    break
 
-                for tool_call in tool_calls:
-                    idx = _get_value(tool_call, "index", 0)
-                    if idx not in tool_calls_accum:
-                        tool_calls_accum[idx] = {"id": "", "name": "", "arguments": ""}
-
-                    tc_id = _get_value(tool_call, "id")
-                    if isinstance(tc_id, str) and tc_id:
-                        tool_calls_accum[idx]["id"] = tc_id
-
-                    fn = _get_value(tool_call, "function", {})
-                    fn_name = _get_value(fn, "name")
-                    if isinstance(fn_name, str) and fn_name:
-                        tool_calls_accum[idx]["name"] = fn_name
-
-                    fn_arguments = _get_value(fn, "arguments")
-                    if isinstance(fn_arguments, str) and fn_arguments:
-                        tool_calls_accum[idx]["arguments"] += fn_arguments
-
-            tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
-
-            if not tool_calls:
-                messages.append({"role": "assistant", "content": assistant_content})
-                break
-
-            tool_call_rounds += 1
-            if tool_call_rounds > MAX_TOOL_CALL_ROUNDS:
-                await response.write(
-                    sse_bytes(
+                tool_call_rounds += 1
+                if tool_call_rounds > MAX_TOOL_CALL_ROUNDS:
+                    yield sse_bytes(
                         "error",
                         {
                             "message": (
@@ -512,78 +508,81 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                             )
                         },
                     )
+                    break
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_content or None,
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
                 )
-                break
 
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_content or None,
-                    "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                        }
-                        for tc in tool_calls
-                    ],
-                }
-            )
-
-            for tc in tool_calls:
-                try:
-                    args = json.loads(tc["arguments"] or "{}")
-                    if not isinstance(args, dict):
+                for tc in tool_calls:
+                    try:
+                        args = json.loads(tc["arguments"] or "{}")
+                        if not isinstance(args, dict):
+                            args = {}
+                    except Exception:
                         args = {}
-                except Exception:
-                    args = {}
 
-                await response.write(sse_bytes("tool_start", {"name": tc["name"], "args": args}))
+                    yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
 
-                try:
-                    raw = await dispatch_tool(tc["name"], args)
-                    tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
-                except Exception as err:
-                    tool_result = format_tool_failure(tc["name"], err)
+                    try:
+                        raw = await dispatch_tool(tc["name"], args)
+                        tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
+                    except Exception as err:
+                        tool_result = format_tool_failure(tc["name"], err)
 
-                await response.write(
-                    sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
-                )
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": tool_result})
-    except Exception as err:
-        await response.write(sse_bytes("error", {"message": str(err) or "LLM error"}))
+                    yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
+                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": tool_result})
+        except Exception as err:
+            yield sse_bytes("error", {"message": str(err) or "LLM error"})
 
-    await response.write(sse_bytes("done", {}))
-    await response.write_eof()
-    return response
+        yield sse_bytes("done", {})
+
+    return Response(
+        event_stream(),
+        status=200,
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            **CORS_HEADERS,
+        },
+    )
 
 
-async def options_handler(_: web.Request) -> web.Response:
-    return web.Response(status=204, headers={**CORS_HEADERS})
-
-
-async def not_found(_: web.Request) -> web.Response:
+async def not_found(**_: Any) -> Response:
     return json_response({"error": "Not found"}, status=404)
 
 
-def setup_ai_routes(app: web.Application, prefix: str = "/api/ai") -> None:
+def setup_ai_routes(app: Quart, prefix: str = "/api/ai") -> None:
     cleaned = (prefix or "").rstrip("/")
     if not cleaned:
         cleaned = "/api/ai"
     chat_path = f"{cleaned}/chat"
-    app.router.add_route("OPTIONS", chat_path, options_handler)
-    app.router.add_route("POST", chat_path, handle_chat)
+    endpoint = f"ai_chat_{cleaned.strip('/').replace('/', '_') or 'root'}"
+    app.add_url_rule(chat_path, endpoint=endpoint, view_func=handle_chat, methods=["POST", "OPTIONS"])
 
 
 def start_http_server() -> None:
-    app = web.Application()
+    app = Quart(__name__)
     setup_ai_routes(app, prefix="/api/ai")
-    app.router.add_route("*", "/{tail:.*}", not_found)
+    app.add_url_rule("/<path:tail>", endpoint="ai_not_found", view_func=not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    app.add_url_rule("/", endpoint="ai_root_not_found", view_func=not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 
     port = int(os.getenv("AI_PORT", "8082"))
     print(f"[ai_controller] HTTP chat server -> http://localhost:{port}")
     print("[ai_controller] POST /api/ai/chat  (SSE streaming)")
-    web.run_app(app, host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":

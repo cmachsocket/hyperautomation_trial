@@ -5,17 +5,16 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
-from aiohttp import WSMsgType, web
+from typing import cast
+
+from quart import Quart, Response, g, request, websocket
 
 from server.ai_controller import setup_ai_routes
 from server.coe.api_routes import setup_asset_routes
 from server.device_manager import DeviceManager, normalize_id, utc_now_iso
 from server.script_runner import ScriptRunner
-
-
-JsonResponse = Callable[[Any, int], web.Response]
 
 
 def _base64url_encode(raw: bytes) -> str:
@@ -62,14 +61,15 @@ def verify_auth_token(secret: str, token: str) -> dict[str, Any] | None:
     return payload
 
 
-def build_json_response(payload: Any, status: int = 200) -> web.Response:
-    return web.json_response(
-        payload,
+def build_json_response(payload: Any, status: int = 200) -> Response:
+    return Response(
+        json.dumps(payload, ensure_ascii=False),
         status=status,
+        content_type="application/json",
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+            "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
             "Cache-Control": "no-store",
         },
     )
@@ -83,13 +83,43 @@ def create_app(
     auth_token_expire_seconds: int,
     device_manager: DeviceManager,
     script_runner: ScriptRunner,
-) -> web.Application:
-    async def options_handler(_: web.Request) -> web.Response:
-        return build_json_response({}, status=204)
+) -> Quart:
+    app = Quart(__name__)
 
-    async def auth_login(request: web.Request) -> web.Response:
+    @app.after_request
+    async def add_cors_headers(response: Response) -> Response:
+        response.headers.setdefault("Access-Control-Allow-Origin", "*")
+        response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS")
+        return response
+
+    @app.before_request
+    async def auth_middleware():
+        if request.method == "OPTIONS":
+            return None
+
+        if not request.path.startswith("/api/"):
+            return None
+
+        if request.path == "/api/auth/login":
+            return None
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return build_json_response({"message": "Unauthorized: missing bearer token"}, status=401)
+
+        token = auth_header.removeprefix("Bearer ").strip()
+        claims = verify_auth_token(auth_token_secret, token)
+        if not claims:
+            return build_json_response({"message": "Unauthorized: invalid or expired token"}, status=401)
+
+        g.auth_claims = claims
+        return None
+
+    @app.route("/api/auth/login", methods=["POST"])
+    async def auth_login() -> Response:
         try:
-            payload = await request.json()
+            payload = await request.get_json()
         except Exception:
             return build_json_response({"message": "Invalid JSON"}, status=400)
 
@@ -116,33 +146,8 @@ def create_app(
             }
         )
 
-    @web.middleware
-    async def auth_middleware(request: web.Request, handler):
-        if request.method == "OPTIONS":
-            return await handler(request)
-
-        if not request.path.startswith("/api/"):
-            return await handler(request)
-
-        if request.path == "/api/auth/login":
-            return await handler(request)
-
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return build_json_response({"message": "Unauthorized: missing bearer token"}, status=401)
-
-        token = auth_header.removeprefix("Bearer ").strip()
-        claims = verify_auth_token(auth_token_secret, token)
-        if not claims:
-            return build_json_response({"message": "Unauthorized: invalid or expired token"}, status=401)
-
-        request["auth_claims"] = claims
-        return await handler(request)
-
-    async def get_merged_map(request: web.Request) -> web.Response:
-        device_id = request.match_info.get("id")
-        normalized_id = normalize_id(device_id)
-
+    async def get_merged_map(device_id: str | None = None) -> Response:
+        normalized_id = normalize_id(device_id or request.args.get("id"))
         if normalized_id is None or not normalized_id.strip():
             return build_json_response({"message": "id is required (path param)"}, status=400)
 
@@ -152,12 +157,22 @@ def create_app(
 
         return build_json_response({"id": normalized_id, **entry, "updatedAt": utc_now_iso()})
 
-    async def get_scripts(_: web.Request) -> web.Response:
+    @app.route("/api/merged-map/<device_id>", methods=["GET"])
+    async def get_merged_map_path(device_id: str) -> Response:
+        return await get_merged_map(device_id)
+
+    @app.route("/api/merged-map", methods=["GET"])
+    async def get_merged_map_query() -> Response:
+        return await get_merged_map(None)
+
+    @app.route("/api/scripts", methods=["GET"])
+    async def get_scripts() -> Response:
         return build_json_response({"scripts": script_runner.list_scripts(), "updatedAt": utc_now_iso()})
 
-    async def scripts_start(request: web.Request) -> web.Response:
+    @app.route("/api/scripts/start", methods=["POST"])
+    async def scripts_start() -> Response:
         try:
-            payload = await request.json()
+            payload = await request.get_json()
         except Exception:
             return build_json_response({"message": "Invalid JSON"}, status=400)
 
@@ -180,9 +195,10 @@ def create_app(
         await device_manager.broadcast(event)
         return build_json_response(event)
 
-    async def scripts_stop(request: web.Request) -> web.Response:
+    @app.route("/api/scripts/stop", methods=["POST"])
+    async def scripts_stop() -> Response:
         try:
-            payload = await request.json()
+            payload = await request.get_json()
         except Exception:
             return build_json_response({"message": "Invalid JSON"}, status=400)
 
@@ -200,9 +216,10 @@ def create_app(
         await device_manager.broadcast(event)
         return build_json_response(event)
 
-    async def device_command(request: web.Request) -> web.Response:
+    @app.route("/api/device/command", methods=["POST"])
+    async def device_command() -> Response:
         try:
-            payload = await request.json()
+            payload = await request.get_json()
         except Exception:
             return build_json_response({"message": "Invalid JSON"}, status=400)
 
@@ -229,9 +246,10 @@ def create_app(
 
         return build_json_response(result["payload"])
 
-    async def device_state(request: web.Request) -> web.Response:
+    @app.route("/api/device/state", methods=["POST"])
+    async def device_state() -> Response:
         try:
-            payload = await request.json()
+            payload = await request.get_json()
         except Exception:
             return build_json_response({"message": "Invalid JSON"}, status=400)
 
@@ -257,7 +275,8 @@ def create_app(
 
         return build_json_response(result["payload"])
 
-    async def seed_sample(_: web.Request) -> web.Response:
+    @app.route("/api/seed-sample", methods=["POST"])
+    async def seed_sample() -> Response:
         sample = {
             "id": "demo-switch-1",
             "payload": {"switchOn": False},
@@ -274,34 +293,41 @@ def create_app(
         await device_manager.broadcast(event)
         return build_json_response(event)
 
-    async def ws_handler(request: web.Request) -> web.StreamResponse:
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        device_manager.all_ws_clients.add(ws)
-
-        await ws.send_json({"type": "connected", "message": "WebSocket server ready"})
+    @app.websocket("/")
+    async def ws_handler() -> None:
+        connection = cast(Any, websocket)._get_current_object()
+        device_manager.register_connection(connection)
+        await device_manager.send_json(connection, {"type": "connected", "message": "WebSocket server ready"})
 
         try:
-            async for message in ws:
-                if message.type != WSMsgType.TEXT:
+            while True:
+                try:
+                    message_data = await connection.receive()
+                except Exception:
+                    break
+
+                if not message_data:
                     continue
 
                 try:
-                    payload = json.loads(message.data)
+                    payload = json.loads(message_data)
                 except json.JSONDecodeError:
-                    await ws.send_json({"type": "error", "message": "Invalid JSON"})
+                    await device_manager.send_json(connection, {"type": "error", "message": "Invalid JSON"})
                     continue
 
                 if not isinstance(payload, dict):
-                    await ws.send_json({"type": "error", "message": "Payload must be a JSON object"})
+                    await device_manager.send_json(connection, {"type": "error", "message": "Payload must be a JSON object"})
                     continue
 
                 device_id = normalize_id(payload.get("id"))
                 if device_id is None:
-                    await ws.send_json({"type": "error", "message": "Payload must include id (string | number)"})
+                    await device_manager.send_json(
+                        connection,
+                        {"type": "error", "message": "Payload must include id (string | number)"},
+                    )
                     continue
 
-                device_manager.register_socket_for_device(ws, device_id)
+                device_manager.register_socket_for_device(connection, device_id)
 
                 if payload.get("type") == "device-state-report":
                     report_payload = dict(payload)
@@ -341,7 +367,8 @@ def create_app(
                 }
                 await device_manager.broadcast(event)
 
-                await ws.send_json(
+                await device_manager.send_json(
+                    connection,
                     {
                         "type": "ack",
                         "id": device_id,
@@ -349,30 +376,26 @@ def create_app(
                         "seq": updated.get("seq"),
                         "status": updated.get("status"),
                         "payload": updated.get("payload") if isinstance(updated.get("payload"), dict) else {},
-                    }
+                    },
                 )
         finally:
-            device_manager.all_ws_clients.discard(ws)
-            device_manager.unregister_socket(ws)
+            device_manager.unregister_socket(connection)
 
-        return ws
+    @app.route("/<path:tail>", methods=["OPTIONS"])
+    async def options_handler(tail: str) -> Response:
+        return build_json_response({}, status=204)
 
-    app = web.Application(middlewares=[auth_middleware])
-    app["device_manager"] = device_manager
-    app["script_runner"] = script_runner
-    app.router.add_route("OPTIONS", "/{tail:.*}", options_handler)
-    app.router.add_get("/", ws_handler)
-    app.router.add_post("/api/auth/login", auth_login)
-    app.router.add_get("/api/merged-map/{id}", get_merged_map)
-    app.router.add_get("/api/scripts", get_scripts)
-    app.router.add_post("/api/scripts/start", scripts_start)
-    app.router.add_post("/api/scripts/stop", scripts_stop)
-    app.router.add_post("/api/device/command", device_command)
-    app.router.add_post("/api/device/state", device_state)
-    app.router.add_post("/api/seed-sample", seed_sample)
+    @app.route("/", methods=["OPTIONS"])
+    async def root_options() -> Response:
+        return build_json_response({}, status=204)
+
+    @app.errorhandler(404)
+    async def not_found(_: Any) -> Response:
+        return build_json_response({"error": "Not found"}, status=404)
+
+    app.config["device_manager"] = device_manager
+    app.config["script_runner"] = script_runner
     setup_ai_routes(app, prefix="/api/ai")
-
-    # Mount CoE asset APIs under /api/coe/assets/* in the same app.
     setup_asset_routes(app)
 
     return app

@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aiohttp import web
-
 from server.api_routes import create_app
 from server.device_manager import DeviceManager
 from server.env_loader import load_env_files
@@ -37,4 +35,4 @@ if __name__ == "__main__":
         device_manager=device_manager,
         script_runner=script_runner,
     )
-    web.run_app(app, port=PORT)
+    app.run(host="0.0.0.0", port=PORT)
