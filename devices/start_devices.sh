@@ -50,7 +50,7 @@ if ! PYTHON_BIN_VALUE="$(resolve_python_bin)"; then
 fi
 
 if [[ "$START_BEEPER_VALUE" != "0" ]]; then
-  "$PYTHON_BIN_VALUE" devivces/beeper.py &
+  "$PYTHON_BIN_VALUE" devices/beeper.py &
   BEEPER_PID=$!
   echo "[start_devices] beeper started (pid=$BEEPER_PID)"
 else
@@ -58,7 +58,7 @@ else
 fi
 
 if [[ "$START_MQ2_VALUE" != "0" ]]; then
-  "$PYTHON_BIN_VALUE" devivces/mq2.py &
+  "$PYTHON_BIN_VALUE" devices/mq2.py &
   MQ2_PID=$!
   echo "[start_devices] mq2 started (pid=$MQ2_PID)"
 else
