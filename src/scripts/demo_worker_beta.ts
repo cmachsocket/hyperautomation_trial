@@ -1,6 +1,6 @@
 const steps = [true, false, true];
 
-function sleep(ms) {
+function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -12,3 +12,5 @@ for (let index = 0; index < steps.length; index += 1) {
 }
 
 console.log('beta standalone script finished');
+
+export {};

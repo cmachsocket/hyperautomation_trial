@@ -78,7 +78,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();

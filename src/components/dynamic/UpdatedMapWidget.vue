@@ -1,20 +1,30 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
-const data = ref({ size: 0, entries: [], updatedAt: '' })
+interface UpdatedMapEntry {
+  id: string
+  updatedAt?: string
+  payload?: {
+    switchOn?: boolean
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
+const data = ref<{ size: number; entries: UpdatedMapEntry[]; updatedAt: string }>({ size: 0, entries: [], updatedAt: '' })
 const loading = ref(false)
 const updatingSwitch = ref(false)
 const error = ref('')
 const demoSwitchId = 'device-0'
-let timer
+let timer: ReturnType<typeof setInterval> | null = null
 
 const demoSwitchState = computed(() => {
   const entry = data.value.entries.find((item) => item.id === demoSwitchId)
   return Boolean(entry?.payload?.switchOn)
 })
 
-const upsertEntryFromServer = (id, updated, updatedAt) => {
+const upsertEntryFromServer = (id: string, updated: Record<string, unknown> | null | undefined, updatedAt: string | undefined) => {
   const entries = [...data.value.entries]
   const index = entries.findIndex((item) => item.id === id)
   const next = { id, ...(updated || {}) }
@@ -96,7 +106,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  clearInterval(timer)
+  if (timer) {
+    clearInterval(timer)
+  }
 })
 </script>
 

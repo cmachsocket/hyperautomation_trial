@@ -1,14 +1,19 @@
-<script setup>
+<script setup lang="ts">
 import { ref, nextTick, onMounted } from 'vue'
+
+interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
 
 const aiBase = (import.meta.env.VITE_AI_BASE_URL || import.meta.env.VITE_API_BASE_URL || '').trim()
 const AI_ENDPOINT = `${aiBase}/api/ai/chat`
 
-const history = ref([])
+const history = ref<ChatMessage[]>([])
 const input = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
-const scrollEl = ref(null)
+const scrollEl = ref<HTMLElement | null>(null)
 
 let streamingIdx = -1
 
@@ -64,7 +69,7 @@ async function sendMessage() {
         const dataLine = part.match(/^data:\s*(.+)$/m)?.[1]?.trim()
         if (!eventLine || !dataLine) continue
 
-        let payload
+        let payload: Record<string, unknown>
         try {
           payload = JSON.parse(dataLine)
         } catch {
@@ -72,18 +77,18 @@ async function sendMessage() {
         }
 
         if (eventLine === 'token') {
-          history.value[streamingIdx].content += payload.text
+          history.value[streamingIdx].content += String(payload.text ?? '')
           scrollBottom()
         } else if (eventLine === 'tool_start') {
-          history.value[streamingIdx].content += `\n[工具调用: ${payload.name}]`
+          history.value[streamingIdx].content += `\n[工具调用: ${String(payload.name ?? 'unknown')}]`
           scrollBottom()
         } else if (eventLine === 'error') {
-          errorMsg.value = payload.message ?? '未知错误'
+          errorMsg.value = String(payload.message ?? '未知错误')
         }
       }
     }
   } catch (err) {
-    const message = err?.message ?? ''
+    const message = err instanceof Error ? err.message : ''
     if (message.includes('HTTP 401')) {
       errorMsg.value = '未登录或登录已过期（HTTP 401）。请重新登录后再试。'
     } else if (message.includes('HTTP 502')) {
@@ -101,7 +106,7 @@ async function sendMessage() {
   }
 }
 
-function onKeydown(e) {
+function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     sendMessage()

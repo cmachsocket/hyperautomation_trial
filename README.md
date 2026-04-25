@@ -65,7 +65,7 @@ Python 服务器依赖：
 - 页面名称：`ScriptControlPage`
 - 组件路径：`src/components/ScriptControlPage.vue`（已移出 `manual-pages`）
 - 每行对应一个脚本，包含状态与启动/停止按钮。
-- 可控脚本会从 `src/scripts/` 自动发现（所有 `.js` 文件）。
+- 可控脚本会从 `src/scripts/` 自动发现（`.ts` 与 `.js` 文件，若同名则优先 `.ts`）。
 - 这些脚本独立运行（standalone），不经过服务端命令转发。
 
 ## AI 聊天（同端口挂载）

@@ -1,4 +1,4 @@
-function sleep(ms) {
+function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -57,8 +57,11 @@ while (running) {
   try {
     await toggleByServer();
   } catch (error) {
-    console.error(`alpha tick ${tick}: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`alpha tick ${tick}: ${message}`);
   }
 }
 
 console.log('alpha control script stopped');
+
+export {};

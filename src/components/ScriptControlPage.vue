@@ -1,12 +1,21 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 
+interface ScriptItem {
+  id: string
+  name: string
+  running: boolean
+  pid?: number | null
+  lastStartedAt?: string | null
+  lastExitCode?: number | null
+}
+
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
-const scripts = ref([])
+const scripts = ref<ScriptItem[]>([])
 const loading = ref(false)
 const error = ref('')
 const pendingActionId = ref('')
-let timer
+let timer: ReturnType<typeof setInterval> | null = null
 
 const fetchScripts = async () => {
   loading.value = true
@@ -27,7 +36,7 @@ const fetchScripts = async () => {
   }
 }
 
-const controlScript = async (id, action) => {
+const controlScript = async (id: string, action: 'start' | 'stop') => {
   pendingActionId.value = `${action}:${id}`
   error.value = ''
 
@@ -58,7 +67,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  clearInterval(timer)
+  if (timer) {
+    clearInterval(timer)
+  }
 })
 </script>
 

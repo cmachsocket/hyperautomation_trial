@@ -11,7 +11,7 @@ from typing import cast
 
 from quart import Quart, Response, g, request, websocket
 
-from server.ai_controller import setup_ai_routes
+from server.ai.ai_controller import setup_ai_routes
 from server.coe.api_routes import setup_asset_routes
 from server.device_manager import DeviceManager, normalize_id, utc_now_iso
 from server.script_runner import ScriptRunner

@@ -285,8 +285,8 @@ async def tool_read_file(file_path: str) -> str:
 
 def validate_written_code_safety(file_path: str, content: str) -> None:
     ext = Path(file_path).suffix.lower()
-    if ext not in {".js", ".vue"}:
-        raise SecurityValidationError(file_path, "only .js/.vue are writable")
+    if ext not in {".js", ".ts", ".vue"}:
+        raise SecurityValidationError(file_path, "only .js/.ts/.vue are writable")
 
     size = len(content.encode("utf-8"))
     if size > MAX_WRITABLE_FILE_SIZE_BYTES:

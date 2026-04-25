@@ -1,7 +1,20 @@
-<script setup>
+<script setup lang="ts">
 import { computed, defineAsyncComponent, reactive, ref } from 'vue'
 import AiController from './components/ai_controller.vue'
 import ScriptControlPage from './components/ScriptControlPage.vue'
+
+type AsyncComponentLoader = () => Promise<unknown>
+
+interface DynamicPanel {
+  id: number
+  slotName: string
+  selectedPath: string
+}
+
+interface LoginPayload {
+  token?: string
+  expiresAt?: string
+}
 
 const activePage = ref('chat')
 const AUTH_STORAGE_KEY = 'hyperautomation:auth-session'
@@ -19,13 +32,13 @@ const authLoading = ref(false)
 const authError = ref('')
 const loginInfo = ref('')
 
-const componentModules = import.meta.glob('./components/dynamic/**/*.vue')
+const componentModules = import.meta.glob('./components/dynamic/**/*.vue') as Record<string, AsyncComponentLoader>
 
 const moduleMap = {
   ...componentModules,
 }
 
-const toLabel = (path) => {
+const toLabel = (path: string) => {
   const fileName = path.split('/').pop()?.replace('.vue', '') || path
   return fileName
 }
@@ -40,13 +53,13 @@ const options = computed(() => {
   return componentOptions
 })
 
-const createPanel = (id, slotName, selectedPath = '') => ({
+const createPanel = (id: number, slotName: string, selectedPath = ''): DynamicPanel => ({
   id,
   slotName,
   selectedPath,
 })
 
-const panels = reactive([])
+const panels = reactive<DynamicPanel[]>([])
 let panelIndex = 1
 
 const addPanel = () => {
@@ -54,7 +67,7 @@ const addPanel = () => {
   panelIndex += 1
 }
 
-const removePanel = (panelId) => {
+const removePanel = (panelId: number) => {
   const targetIndex = panels.findIndex((panel) => panel.id === panelId)
   if (targetIndex >= 0) {
     panels.splice(targetIndex, 1)
@@ -63,17 +76,17 @@ const removePanel = (panelId) => {
 
 addPanel()
 
-const getAsyncView = (path) => {
+const getAsyncView = (path: string) => {
   if (!path || !moduleMap[path]) {
     return null
   }
   return defineAsyncComponent(moduleMap[path])
 }
 
-const parseJsonResponse = async (response, requestUrl, fallbackMessage) => {
+const parseJsonResponse = async (response: Response, requestUrl: string, fallbackMessage: string) => {
   const contentType = response.headers.get('content-type') || ''
   if (contentType.toLowerCase().includes('application/json')) {
-    return response.json()
+    return (await response.json()) as LoginPayload
   }
 
   const raw = await response.text()

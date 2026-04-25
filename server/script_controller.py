@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 from dataclasses import dataclass
@@ -37,7 +38,19 @@ def discover_script_defs(scripts_dir: Path = SCRIPTS_DIR) -> list[ScriptDef]:
     if not scripts_dir.exists() or not scripts_dir.is_dir():
         return []
 
-    script_files = sorted(path for path in scripts_dir.glob("*.js") if path.is_file())
+    script_files_by_stem: dict[str, Path] = {}
+    for path in sorted(scripts_dir.glob("*")):
+        if not path.is_file() or path.suffix not in {".ts", ".js"}:
+            continue
+        existing = script_files_by_stem.get(path.stem)
+        if existing is None:
+            script_files_by_stem[path.stem] = path
+            continue
+        # Prefer TypeScript if both .ts and .js exist for the same stem.
+        if existing.suffix == ".js" and path.suffix == ".ts":
+            script_files_by_stem[path.stem] = path
+
+    script_files = [script_files_by_stem[key] for key in sorted(script_files_by_stem.keys())]
     return [
         ScriptDef(
             id=to_script_id(script_file),
@@ -116,9 +129,16 @@ class ScriptController:
         if process and process.poll() is None and status.get("running"):
             return {"ok": True, "alreadyRunning": True, "script": dict(status)}
 
-        node_bin = os.getenv("NODE_BIN", "node")
+        cmd = self._build_script_command(script_def.file_path)
+        if cmd is None:
+            return {
+                "ok": False,
+                "statusCode": 500,
+                "message": "Cannot run TypeScript script: please install tsx or set TSX_BIN.",
+            }
+
         proc = subprocess.Popen(
-            [node_bin, str(script_def.file_path)],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -176,3 +196,22 @@ class ScriptController:
                 "lastExitCode": code,
             }
             self._proc_map.pop(script_id, None)
+
+    def _build_script_command(self, file_path: Path) -> list[str] | None:
+        if file_path.suffix == ".ts":
+            tsx_bin = os.getenv("TSX_BIN")
+            if tsx_bin:
+                return [tsx_bin, str(file_path)]
+
+            local_tsx = ROOT_DIR / "node_modules" / ".bin" / "tsx"
+            if local_tsx.exists():
+                return [str(local_tsx), str(file_path)]
+
+            tsx_from_path = shutil.which("tsx")
+            if tsx_from_path:
+                return [tsx_from_path, str(file_path)]
+
+            return None
+
+        node_bin = os.getenv("NODE_BIN", "node")
+        return [node_bin, str(file_path)]
