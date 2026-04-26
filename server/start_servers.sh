@@ -16,7 +16,12 @@ set +a
 WS_PORT_VALUE="${WS_PORT:-8081}"
 START_MCP_VALUE="${START_MCP:-1}"
 
-resolve_python_bin() {
+resolve_python_runner() {
+  if command -v uv >/dev/null 2>&1; then
+    echo "uv"
+    return 0
+  fi
+
   if [[ -n "${PYTHON_BIN:-}" ]]; then
     echo "$PYTHON_BIN"
     return 0
@@ -59,15 +64,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if ! PYTHON_BIN_VALUE="$(resolve_python_bin)"; then
-  echo "[start_servers] error: python/python3 not found."
+if ! PYTHON_RUNNER_VALUE="$(resolve_python_runner)"; then
+  echo "[start_servers] error: uv or python/python3 not found."
   exit 1
 fi
 
 if is_port_listening "$WS_PORT_VALUE"; then
   echo "[start_servers] ws port $WS_PORT_VALUE already in use, skip starting ws_server.py"
 else
-  "$PYTHON_BIN_VALUE" -m server.ws_server &
+  if [[ "$PYTHON_RUNNER_VALUE" == "uv" ]]; then
+    uv run --no-sync -- python -m server.ws_server &
+  else
+    "$PYTHON_RUNNER_VALUE" -m server.ws_server &
+  fi
   WS_PID=$!
 fi
 
@@ -78,7 +87,11 @@ fi
 if [[ "$START_MCP_VALUE" != "0" ]]; then
   echo "[start_servers] starting mcp stdio server"
   echo "Press Ctrl+C to stop started services"
-  "$PYTHON_BIN_VALUE" -m server.ai_controller_fastmcp
+  if [[ "$PYTHON_RUNNER_VALUE" == "uv" ]]; then
+    uv run --no-sync -- python -m server.ai.ai_controller_fastmcp
+  else
+    "$PYTHON_RUNNER_VALUE" -m server.ai.ai_controller_fastmcp
+  fi
   exit $?
 fi
 

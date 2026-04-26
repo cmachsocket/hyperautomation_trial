@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-04-13T12:29:03.518099+00:00",
+  "updated_at": "2026-04-26T08:05:13.060639+00:00",
   "assets": [
     {
       "id": "temp-sensor-01",
@@ -90,7 +90,7 @@
       "id": "demo-worker-alpha",
       "name": "demo_worker_alpha",
       "type": "script",
-      "status": "planning",
+      "status": "deprecated",
       "metadata": {
         "owner": "system",
         "team": "general",
@@ -98,7 +98,7 @@
         "description": "",
         "version": "1.0.0",
         "created_at": "2026-03-26T16:42:47.491991+00:00",
-        "updated_at": "2026-04-01T07:06:41.183802+00:00",
+        "updated_at": "2026-04-26T08:05:05.233391+00:00",
         "documentation": ""
       },
       "runtime_state": {
@@ -116,7 +116,7 @@
       "id": "script-demo-worker-beta-18bb1483fd02",
       "name": "demo_worker_beta",
       "type": "script",
-      "status": "planning",
+      "status": "deprecated",
       "metadata": {
         "owner": "system",
         "team": "automation",
@@ -127,7 +127,7 @@
         "description": "Auto-synced from src/scripts/demo_worker_beta.js",
         "version": "1.0.0",
         "created_at": "2026-04-01T07:06:41.184372+00:00",
-        "updated_at": "2026-04-01T07:06:41.184372+00:00",
+        "updated_at": "2026-04-26T08:05:05.233391+00:00",
         "documentation": ""
       },
       "runtime_state": {
@@ -145,7 +145,7 @@
       "id": "script-monitor-temperature-94018f40cf64",
       "name": "monitor_temperature",
       "type": "script",
-      "status": "planning",
+      "status": "deprecated",
       "metadata": {
         "owner": "system",
         "team": "automation",
@@ -156,7 +156,7 @@
         "description": "Auto-synced from src/scripts/monitor_temperature.js",
         "version": "1.0.0",
         "created_at": "2026-04-01T07:06:41.214250+00:00",
-        "updated_at": "2026-04-01T07:06:41.214250+00:00",
+        "updated_at": "2026-04-26T08:05:05.233391+00:00",
         "documentation": ""
       },
       "runtime_state": {
@@ -166,6 +166,93 @@
       },
       "script_path": "src/scripts/monitor_temperature.js",
       "language": "javascript",
+      "parameters": [],
+      "run_count": 0,
+      "avg_duration_ms": 0.0
+    },
+    {
+      "id": "script-demo-worker-alpha-af0b21ded526",
+      "name": "demo_worker_alpha",
+      "type": "script",
+      "status": "planning",
+      "metadata": {
+        "owner": "system",
+        "team": "automation",
+        "tags": [
+          "auto-synced",
+          "script"
+        ],
+        "description": "Auto-synced from src/scripts/demo_worker_alpha.ts",
+        "version": "1.0.0",
+        "created_at": "2026-04-26T08:05:05.233735+00:00",
+        "updated_at": "2026-04-26T08:05:05.233735+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {
+        "file_md5": "af0b21ded526462242d48cf4b8e59dd9",
+        "file_mtime_ns": 1777145701776168454,
+        "file_size": 1657
+      },
+      "script_path": "src/scripts/demo_worker_alpha.ts",
+      "language": "typescript",
+      "parameters": [],
+      "run_count": 0,
+      "avg_duration_ms": 0.0
+    },
+    {
+      "id": "script-demo-worker-beta-3e83b1b184d0",
+      "name": "demo_worker_beta",
+      "type": "script",
+      "status": "planning",
+      "metadata": {
+        "owner": "system",
+        "team": "automation",
+        "tags": [
+          "auto-synced",
+          "script"
+        ],
+        "description": "Auto-synced from src/scripts/demo_worker_beta.ts",
+        "version": "1.0.0",
+        "created_at": "2026-04-26T08:05:05.234846+00:00",
+        "updated_at": "2026-04-26T08:05:05.234846+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {
+        "file_md5": "3e83b1b184d0fa72337f55609240f327",
+        "file_mtime_ns": 1777145793302137025,
+        "file_size": 383
+      },
+      "script_path": "src/scripts/demo_worker_beta.ts",
+      "language": "typescript",
+      "parameters": [],
+      "run_count": 0,
+      "avg_duration_ms": 0.0
+    },
+    {
+      "id": "script-monitor-temperature-94018f40cf64-2",
+      "name": "monitor_temperature",
+      "type": "script",
+      "status": "planning",
+      "metadata": {
+        "owner": "system",
+        "team": "automation",
+        "tags": [
+          "auto-synced",
+          "script"
+        ],
+        "description": "Auto-synced from src/scripts/monitor_temperature.ts",
+        "version": "1.0.0",
+        "created_at": "2026-04-26T08:05:05.235416+00:00",
+        "updated_at": "2026-04-26T08:05:05.235416+00:00",
+        "documentation": ""
+      },
+      "runtime_state": {
+        "file_md5": "94018f40cf645c6bfbb0c074f40a6b1c",
+        "file_mtime_ns": 1773838209933410570,
+        "file_size": 1412
+      },
+      "script_path": "src/scripts/monitor_temperature.ts",
+      "language": "typescript",
       "parameters": [],
       "run_count": 0,
       "avg_duration_ms": 0.0

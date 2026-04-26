@@ -16,6 +16,7 @@ set +a
 START_BEEPER_VALUE="${START_BEEPER:-1}"
 START_MQ2_VALUE="${START_MQ2:-1}"
 START_BME280_VALUE="${START_BME280:-1}"
+START_OLED_VALUE="${START_OLED:-1}"
 
 resolve_python_bin() {
   if [[ -n "${PYTHON_BIN:-}" ]]; then
@@ -41,6 +42,7 @@ cleanup() {
   if [[ -n "${BEEPER_PID:-}" ]]; then kill "$BEEPER_PID" 2>/dev/null || true; fi
   if [[ -n "${MQ2_PID:-}" ]]; then kill "$MQ2_PID" 2>/dev/null || true; fi
   if [[ -n "${BME280_PID:-}" ]]; then kill "$BME280_PID" 2>/dev/null || true; fi
+  if [[ -n "${OLED_PID:-}" ]]; then kill "$OLED_PID" 2>/dev/null || true; fi
   wait 2>/dev/null || true
   exit "$exit_code"
 }
@@ -75,7 +77,15 @@ else
   echo "[start_devices] START_BME280=0, skip bme280"
 fi
 
-if [[ -z "${BEEPER_PID:-}" && -z "${MQ2_PID:-}" && -z "${BME280_PID:-}" ]]; then
+if [[ "$START_OLED_VALUE" != "0" ]]; then
+  "$PYTHON_BIN_VALUE" devices/oled.py &
+  OLED_PID=$!
+  echo "[start_devices] oled started (pid=$OLED_PID)"
+else
+  echo "[start_devices] START_OLED=0, skip oled"
+fi
+
+if [[ -z "${BEEPER_PID:-}" && -z "${MQ2_PID:-}" && -z "${BME280_PID:-}" && -z "${OLED_PID:-}" ]]; then
   echo "[start_devices] nothing to start"
   exit 0
 fi

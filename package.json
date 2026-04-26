@@ -14,7 +14,7 @@
     "cap:open:android": "npx cap open android",
     "ws:server": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; python -m server.ws_server'",
     "ws:server:py": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; python -m server.ws_server'",
-    "ai:controller": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; python -m server.ai_controller_fastmcp'",
+    "ai:controller": "bash -lc 'set -a; [ -f .env ] && . ./.env; [ -f local.env ] && . ./local.env; set +a; python -m server.ai.ai_controller_fastmcp'",
     "servers:start": "bash server/start_servers.sh"
   },
   "dependencies": {
