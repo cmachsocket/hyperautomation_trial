@@ -20,6 +20,8 @@ Usage: devices/start_devices.sh [options]
 Options:
   --devices <list>   Comma-separated device names: beeper,mq2,bme280,oled
                      Special values: all, none
+  --ws-url <url>     Override WS_URL for all started device clients
+  --server-url <url> Alias of --ws-url
   --beeper           Enable beeper
   --no-beeper        Disable beeper
   --mq2              Enable mq2
@@ -144,6 +146,7 @@ print_selection() {
 
 INTERACTIVE=0
 LIST_ONLY=0
+WS_URL_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -153,6 +156,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       set_from_devices_arg "$2"
+      shift 2
+      ;;
+    --ws-url|--server-url)
+      if [[ $# -lt 2 ]]; then
+        echo "[start_devices] error: $1 requires an argument"
+        exit 1
+      fi
+      WS_URL_OVERRIDE="$2"
       shift 2
       ;;
     --beeper) set_device_enabled beeper 1; shift ;;
@@ -191,6 +202,11 @@ fi
 
 if [[ "$LIST_ONLY" == "1" ]]; then
   print_selection
+  if [[ -n "$WS_URL_OVERRIDE" ]]; then
+    echo "[start_devices] ws-url override: $WS_URL_OVERRIDE"
+  else
+    echo "[start_devices] ws-url override: <none> (uses WS_URL from env in child processes)"
+  fi
   exit 0
 fi
 
@@ -232,12 +248,19 @@ fi
 start_device() {
   local name="$1"
   local script="$2"
-  "$PYTHON_BIN_VALUE" "$script" &
+  if [[ -n "$WS_URL_OVERRIDE" ]]; then
+    WS_URL="$WS_URL_OVERRIDE" "$PYTHON_BIN_VALUE" "$script" &
+  else
+    "$PYTHON_BIN_VALUE" "$script" &
+  fi
   PIDS["$name"]=$!
   echo "[start_devices] ${name} started (pid=${PIDS[$name]})"
 }
 
 print_selection
+if [[ -n "$WS_URL_OVERRIDE" ]]; then
+  echo "[start_devices] ws-url override: $WS_URL_OVERRIDE"
+fi
 
 if [[ "${ENABLED[beeper]}" == "1" ]]; then
   start_device beeper devices/beeper.py
@@ -252,7 +275,7 @@ else
 fi
 
 if [[ "${ENABLED[bme280]}" == "1" ]]; then
-  start_device bme280 devices/bme280.py
+  start_device bme280 devices/bme280device.py
 else
   echo "[start_devices] skip bme280"
 fi

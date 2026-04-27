@@ -21,7 +21,7 @@ def _utc_now_iso() -> str:
 
 
 def _import_bme280_module() -> Any:
-    # 当前文件名也叫 bme280.py，临时移除同目录路径以避免导入到本文件。
+    # 临时移除当前目录路径，避免优先导入本地同名模块。
     current_dir = str(Path(__file__).resolve().parent)
     removed = False
     if current_dir in sys.path:
