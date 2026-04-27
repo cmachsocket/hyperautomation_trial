@@ -66,6 +66,7 @@ class BME280Sampler:
         assert self._calibration is not None
 
         data = self._bme280.sample(self._bus, self.address, self._calibration)
+        print(f"tmperatureC : {round(float(data.temperature), 2)},pressureHpa: {round(float(data.pressure), 2)},humidityPct: {round(float(data.humidity), 2)}")
         return {
             "temperatureC": round(float(data.temperature), 2),
             "pressureHpa": round(float(data.pressure), 2),
