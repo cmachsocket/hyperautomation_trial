@@ -20,6 +20,17 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_enabled(raw: str | None) -> bool:
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _debug_log(enabled: bool, message: str) -> None:
+    if enabled:
+        print(f"[bme280-debug] {message}")
+
+
 def _import_bme280_module() -> Any:
     # 临时移除当前目录路径，避免优先导入本地同名模块。
     current_dir = str(Path(__file__).resolve().parent)
@@ -36,9 +47,10 @@ def _import_bme280_module() -> Any:
 
 
 class BME280Sampler:
-    def __init__(self, port: int, address: int) -> None:
+    def __init__(self, port: int, address: int, debug: bool = False) -> None:
         self.port = port
         self.address = address
+        self.debug = debug
         self._smbus2: Any | None = None
         self._bme280: Any | None = None
         self._bus: Any | None = None
@@ -47,17 +59,26 @@ class BME280Sampler:
     def _ensure_ready(self) -> None:
         if self._smbus2 is None:
             self._smbus2 = importlib.import_module("smbus2")
+            _debug_log(self.debug, "smbus2 module loaded")
         if self._bme280 is None:
-            self._bme280 = _import_bme280_module()
+            try:
+                self._bme280 = _import_bme280_module()
+                module_path = getattr(self._bme280, "__file__", "<unknown>")
+                _debug_log(self.debug, f"bme280 module loaded from {module_path}")
+            except Exception as exc:
+                _debug_log(self.debug, f"failed to load bme280 module: {exc}")
+                raise
 
         assert self._smbus2 is not None
         assert self._bme280 is not None
 
         if self._bus is None:
             self._bus = self._smbus2.SMBus(self.port)
+            _debug_log(self.debug, f"i2c bus opened on port={self.port}")
 
         if self._calibration is None:
             self._calibration = self._bme280.load_calibration_params(self._bus, self.address)
+            _debug_log(self.debug, f"calibration loaded for address=0x{self.address:02X}")
 
     def read(self) -> dict[str, Any]:
         self._ensure_ready()
@@ -66,11 +87,20 @@ class BME280Sampler:
         assert self._calibration is not None
 
         data = self._bme280.sample(self._bus, self.address, self._calibration)
-        print(f"tmperatureC : {round(float(data.temperature), 2)},pressureHpa: {round(float(data.pressure), 2)},humidityPct: {round(float(data.humidity), 2)}")
+        temperature = round(float(data.temperature), 2)
+        pressure = round(float(data.pressure), 2)
+        humidity = round(float(data.humidity), 2)
+        _debug_log(
+            self.debug,
+            (
+                "sample ok "
+                f"temperatureC={temperature}, pressureHpa={pressure}, humidityPct={humidity}"
+            ),
+        )
         return {
-            "temperatureC": round(float(data.temperature), 2),
-            "pressureHpa": round(float(data.pressure), 2),
-            "humidityPct": round(float(data.humidity), 2),
+            "temperatureC": temperature,
+            "pressureHpa": pressure,
+            "humidityPct": humidity,
             "i2cPort": self.port,
             "i2cAddress": f"0x{self.address:02X}",
             "sampledAt": _utc_now_iso(),
@@ -80,6 +110,7 @@ class BME280Sampler:
         if self._bus is not None:
             with suppress(Exception):
                 self._bus.close()
+            _debug_log(self.debug, "i2c bus closed")
         self._bus = None
         self._calibration = None
 
@@ -120,6 +151,7 @@ async def _sender(ws: Any, state: BME280State, interval: float) -> None:
         except Exception as exc:
             state.status = "error"
             state.last_error = str(exc)
+            _debug_log(state.sampler.debug, f"sample failed: {exc}")
             state.sampler.reset()
             message = {
                 "id": state.device_id,
@@ -165,12 +197,27 @@ async def main() -> None:
     parser.add_argument("--address", type=_parse_i2c_address, default=_parse_i2c_address(os.getenv("BME280_I2C_ADDRESS", "0x76")))
     parser.add_argument("--interval", type=float, default=float(os.getenv("BME280_REPORT_INTERVAL", "2.0")))
     parser.add_argument("--reconnect-delay", type=float, default=float(os.getenv("BME280_RECONNECT_DELAY", "3.0")))
+    parser.add_argument(
+        "--debug",
+        dest="debug",
+        action="store_true",
+        default=_is_enabled(os.getenv("BME280_DEBUG", "1")),
+    )
+    parser.add_argument("--no-debug", dest="debug", action="store_false")
     args = parser.parse_args()
 
     state = BME280State(
         device_id=args.device_id,
         client_id=args.client_id,
-        sampler=BME280Sampler(port=args.port, address=args.address),
+        sampler=BME280Sampler(port=args.port, address=args.address, debug=args.debug),
+    )
+
+    _debug_log(
+        args.debug,
+        (
+            "client starting "
+            f"url={args.url}, device_id={args.device_id}, port={args.port}, address=0x{args.address:02X}"
+        ),
     )
 
     loop = asyncio.get_running_loop()
