@@ -10,11 +10,11 @@ This is a rewrite with better robustness for stdio-based MCP communication.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
 import sys
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +25,7 @@ from fastmcp import FastMCP
 # ============================================================================
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
-MAX_READ_FILE_SIZE_BYTES = int(
-    os.environ.get("AI_MAX_READ_FILE_SIZE_BYTES", str(120 * 1024))
-)
-MAX_READ_CHUNK_LINES = 400
+MAX_READ_CHUNK_LINES = int(os.environ.get("AI_MAX_READ_CHUNK_LINES", "400"))
 
 # DEBUG 标志
 _AI_MCP_DEBUG_ENV = os.environ.get("AI_MCP_DEBUG", "1").strip()
@@ -170,20 +167,6 @@ def list_files(dir_path: str = ".") -> str:
         raise
 
 
-@mcp.tool(description="Read the full content of a file (path relative to project root).")
-def read_file(file_path: str) -> str:
-    """读取文件的完整内容."""
-    logger.debug(f"→ read_file({file_path})")
-    try:
-        # Full-file reads are disabled to avoid excessive token usage.
-        raise ValueError(
-            "Full file reads are disabled. Use 'read_file_chunk' with 'start_line' and 'end_line' instead."
-        )
-    except Exception as e:
-        logger.error(f"✗ read_file({file_path}) failed: {type(e).__name__}: {e}")
-        raise
-
-
 @mcp.tool(description="Read a file by line range (1-based, inclusive).")
 def read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
     """按行范围读取文件（1-based,包含结束行）."""
@@ -221,20 +204,6 @@ def read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
         raise
 
 
-@mcp.tool(description="Create or overwrite a file, but only inside src/scripts or src/components/dynamic.")
-def write_file(file_path: str, content: str) -> str:
-    """创建或覆盖文件（仅限scripts和widgets目录）."""
-    logger.debug(f"→ write_file({file_path}, size={len(content)})")
-    try:
-        # Full-file writes are disabled. Use `write_file_chunk` to upload in chunks and finalize atomically.
-        raise ValueError(
-            "Full file writes are disabled. Use 'write_file_chunk' with 'upload_id','chunk_index','content' and set 'finalize'=true on last chunk."
-        )
-    except Exception as e:
-        logger.error(f"✗ write_file({file_path}) failed: {type(e).__name__}: {e}")
-        raise
-
-
 @mcp.tool(description="Write a file in chunks. Call repeatedly with the same 'upload_id' and increasing 'chunk_index'. Set 'finalize'=true on the last chunk to commit atomically.")
 def write_file_chunk(upload_id: str, file_path: str, chunk_index: int, content: str, finalize: bool = False) -> str:
     logger.debug(f"→ write_file_chunk(upload_id={upload_id}, file_path={file_path}, chunk_index={chunk_index}, finalize={finalize})")
@@ -248,7 +217,7 @@ def write_file_chunk(upload_id: str, file_path: str, chunk_index: int, content: 
         temp_dir = PROJECT_ROOT / ".ai_write_tmp"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
-        key = __import__("hashlib").sha256(f"{upload_id}:{file_path}".encode("utf-8")).hexdigest()
+        key = hashlib.sha256(f"{upload_id}:{file_path}".encode("utf-8")).hexdigest()
         chunk_path = temp_dir / f"{key}.chunk{chunk_index:06d}"
         chunk_path.write_text(content, encoding="utf-8")
 
