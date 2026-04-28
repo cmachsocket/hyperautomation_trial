@@ -175,16 +175,10 @@ def read_file(file_path: str) -> str:
     """读取文件的完整内容."""
     logger.debug(f"→ read_file({file_path})")
     try:
-        resolved = assert_readable_path(file_path)
-        size = resolved.stat().st_size
-        if size > MAX_READ_FILE_SIZE_BYTES:
-            raise ValueError(
-                f"file too large ({size} bytes > {MAX_READ_FILE_SIZE_BYTES} bytes), "
-                "please read a smaller file or use read_file_chunk"
-            )
-        content = resolved.read_text(encoding="utf-8")
-        logger.debug(f"← read_file: {size} bytes")
-        return content
+        # Full-file reads are disabled to avoid excessive token usage.
+        raise ValueError(
+            "Full file reads are disabled. Use 'read_file_chunk' with 'start_line' and 'end_line' instead."
+        )
     except Exception as e:
         logger.error(f"✗ read_file({file_path}) failed: {type(e).__name__}: {e}")
         raise
@@ -232,31 +226,80 @@ def write_file(file_path: str, content: str) -> str:
     """创建或覆盖文件（仅限scripts和widgets目录）."""
     logger.debug(f"→ write_file({file_path}, size={len(content)})")
     try:
-        resolved = assert_writable_path(file_path)
-        existed_before = resolved.exists()
-        previous_content = ""
-
-        if existed_before:
-            previous_content = resolved.read_text(encoding="utf-8")
-
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content, encoding="utf-8")
-
-        try:
-            validate_written_code_safety(file_path, content)
-        except Exception as err:
-            if existed_before:
-                resolved.write_text(previous_content, encoding="utf-8")
-            elif resolved.exists():
-                resolved.unlink()
-            raise SecurityValidationError(
-                f"Security check failed for '{file_path}': {err}. Write has been rolled back."
-            ) from err
-
-        logger.debug(f"← write_file: OK")
-        return f"OK: written '{file_path}' (security-check: passed)"
+        # Full-file writes are disabled. Use `write_file_chunk` to upload in chunks and finalize atomically.
+        raise ValueError(
+            "Full file writes are disabled. Use 'write_file_chunk' with 'upload_id','chunk_index','content' and set 'finalize'=true on last chunk."
+        )
     except Exception as e:
         logger.error(f"✗ write_file({file_path}) failed: {type(e).__name__}: {e}")
+        raise
+
+
+@mcp.tool(description="Write a file in chunks. Call repeatedly with the same 'upload_id' and increasing 'chunk_index'. Set 'finalize'=true on the last chunk to commit atomically.")
+def write_file_chunk(upload_id: str, file_path: str, chunk_index: int, content: str, finalize: bool = False) -> str:
+    logger.debug(f"→ write_file_chunk(upload_id={upload_id}, file_path={file_path}, chunk_index={chunk_index}, finalize={finalize})")
+    try:
+        if not isinstance(upload_id, str) or not upload_id:
+            raise ValueError("upload_id is required and must be a non-empty string")
+        if not isinstance(chunk_index, int) or chunk_index < 0:
+            raise ValueError("chunk_index must be a non-negative integer")
+
+        resolved = assert_writable_path(file_path)
+        temp_dir = PROJECT_ROOT / ".ai_write_tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        key = __import__("hashlib").sha256(f"{upload_id}:{file_path}".encode("utf-8")).hexdigest()
+        chunk_path = temp_dir / f"{key}.chunk{chunk_index:06d}"
+        chunk_path.write_text(content, encoding="utf-8")
+
+        if not finalize:
+            logger.debug(f"← write_file_chunk: stored chunk {chunk_index}")
+            return f"OK: stored chunk {chunk_index} for upload_id={upload_id}"
+
+        # finalize: assemble chunks
+        chunks = sorted([p for p in temp_dir.iterdir() if p.name.startswith(key + ".chunk")])
+        if not chunks:
+            raise ValueError("No chunks found to finalize")
+
+        parts = []
+        total_bytes = 0
+        for p in chunks:
+            part = p.read_text(encoding="utf-8")
+            total_bytes += len(part.encode("utf-8"))
+            if total_bytes > MAX_WRITABLE_FILE_SIZE_BYTES:
+                raise SecurityValidationError(f"assembled file too large ({total_bytes} bytes)")
+            parts.append(part)
+
+        assembled = "".join(parts)
+
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        target_tmp = resolved.with_suffix(resolved.suffix + ".tmp_ai")
+        target_tmp.write_text(assembled, encoding="utf-8")
+
+        try:
+            validate_written_code_safety(file_path, assembled)
+        except Exception as err:
+            if target_tmp.exists():
+                target_tmp.unlink()
+            raise
+
+        # backup and replace
+        if resolved.exists():
+            backup = resolved.with_suffix(resolved.suffix + ".backup_ai")
+            resolved.rename(backup)
+        target_tmp.rename(resolved)
+
+        # cleanup
+        for p in chunks:
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+        logger.debug(f"← write_file_chunk: assembled {len(chunks)} chunks into {file_path}")
+        return f"OK: written '{file_path}' (assembled from {len(chunks)} chunks)"
+    except Exception as e:
+        logger.error(f"✗ write_file_chunk failed: {type(e).__name__}: {e}")
         raise
 
 

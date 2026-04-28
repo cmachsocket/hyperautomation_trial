@@ -78,6 +78,13 @@ if not LOGGER.handlers:
 LOGGER.setLevel(logging.DEBUG if AI_DEBUG else logging.INFO)
 LOGGER.propagate = False
 
+# Deprecated notice: this module has been replaced by ai_controller_sse.py
+# and is retained only for historical/reference purposes. Any runtime
+# usage should be migrated to server/ai/ai_controller_sse.py. Calls into
+# the old HTTP server helpers will raise a RuntimeError to avoid accidental
+# usage.
+LOGGER.warning("ai_controller.py is DEPRECATED: use server/ai/ai_controller_sse.py instead")
+
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"\b(?:require|import)\s*\(?\s*[\"'](?:node:)?child_process[\"']\s*\)?", re.MULTILINE),
@@ -156,18 +163,6 @@ LLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "read_file",
-            "description": "Read the full content of a file (path relative to project root).",
-            "parameters": {
-                "type": "object",
-                "properties": {"file_path": {"type": "string"}},
-                "required": ["file_path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "read_file_chunk",
             "description": "Read a file by line range (1-based, inclusive).",
             "parameters": {
@@ -181,18 +176,22 @@ LLM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    
     {
         "type": "function",
         "function": {
-            "name": "write_file",
-            "description": "Create or overwrite a file, but only inside src/scripts or src/components/dynamic.",
+            "name": "write_file_chunk",
+            "description": "Write a file in chunks. Call repeatedly with the same 'upload_id' and increasing 'chunk_index'. Set 'finalize'=true on the last chunk to commit atomically.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "upload_id": {"type": "string", "description": "Client-generated id for this upload stream."},
                     "file_path": {"type": "string"},
+                    "chunk_index": {"type": "integer", "minimum": 0},
                     "content": {"type": "string"},
+                    "finalize": {"type": "boolean"},
                 },
-                "required": ["file_path", "content"],
+                "required": ["upload_id", "file_path", "chunk_index", "content"],
             },
         },
     },
@@ -328,18 +327,11 @@ async def tool_list_files(dir_path: str = ".") -> list[dict[str, Any]]:
 
 
 async def tool_read_file(file_path: str) -> str:
-    resolved = assert_readable_path(file_path)
-    size = resolved.stat().st_size
-    if size > MAX_READ_FILE_SIZE_BYTES:
-        raise ValueError(
-            " ".join(
-                [
-                    f"file too large ({size} bytes > {MAX_READ_FILE_SIZE_BYTES} bytes)",
-                    "please read a smaller file or ask for a targeted excerpt",
-                ]
-            )
-        )
-    return resolved.read_text(encoding="utf-8")
+    # Full-file reads are intentionally disabled to avoid large token usage.
+    # Consumers must call `read_file_chunk` with a line range instead.
+    raise ValueError(
+        "Full file reads are disabled. Use 'read_file_chunk' with 'start_line' and 'end_line' instead."
+    )
 
 
 async def tool_read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
@@ -384,27 +376,77 @@ def validate_written_code_safety(file_path: str, content: str) -> None:
 
 
 async def tool_write_file(file_path: str, content: str) -> str:
+    # Full-file writes are disabled. Use `write_file_chunk` to upload in pieces and commit atomically.
+    raise ValueError(
+        "Full file writes are disabled. Use 'write_file_chunk' (upload_id, chunk_index, content, finalize) instead."
+    )
+
+
+async def tool_write_file_chunk(upload_id: str, file_path: str, chunk_index: int, content: str, finalize: bool = False) -> str:
+    # Basic validation
+    if not isinstance(upload_id, str) or not upload_id:
+        raise ValueError("upload_id is required and must be a non-empty string")
+    if not isinstance(chunk_index, int) or chunk_index < 0:
+        raise ValueError("chunk_index must be a non-negative integer")
+
     resolved = assert_writable_path(file_path)
-    existed_before = resolved.exists()
-    previous_content = ""
+    temp_dir = PROJECT_ROOT / ".ai_write_tmp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
-    if existed_before:
-        previous_content = resolved.read_text(encoding="utf-8")
+    key = hashlib.sha256(f"{upload_id}:{file_path}".encode("utf-8")).hexdigest()
+    chunk_path = temp_dir / f"{key}.chunk{chunk_index:06d}"
 
+    # write chunk (overwrite if same index re-sent)
+    chunk_path.write_text(content, encoding="utf-8")
+
+    if not finalize:
+        return f"OK: stored chunk {chunk_index} for upload_id={upload_id}"
+
+    # finalize: assemble all chunks for this upload
+    chunks = sorted(p for p in temp_dir.iterdir() if p.name.startswith(key) and p.name.endswith(".chunk" + p.name.split(".chunk")[-1]))
+    # Fallback: collect by prefix
+    chunks = sorted([p for p in temp_dir.iterdir() if p.name.startswith(key + ".chunk")])
+    if not chunks:
+        raise ValueError("No chunks found to finalize")
+
+    # read and concatenate, while enforcing size limit
+    parts: list[str] = []
+    total_bytes = 0
+    for p in chunks:
+        part = p.read_text(encoding="utf-8")
+        total_bytes += len(part.encode("utf-8"))
+        if total_bytes > MAX_WRITABLE_FILE_SIZE_BYTES:
+            raise SecurityValidationError(file_path, f"assembled file too large ({total_bytes} bytes)")
+        parts.append(part)
+
+    assembled = "".join(parts)
+
+    # atomic write: write to temp file then rename
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(content, encoding="utf-8")
+    target_tmp = resolved.with_suffix(resolved.suffix + ".tmp_ai")
+    target_tmp.write_text(assembled, encoding="utf-8")
 
     try:
-        validate_written_code_safety(file_path, content)
+        validate_written_code_safety(file_path, assembled)
     except Exception:
-        if existed_before:
-            resolved.write_text(previous_content, encoding="utf-8")
-        else:
-            if resolved.exists():
-                resolved.unlink()
+        if target_tmp.exists():
+            target_tmp.unlink()
         raise
 
-    return f"OK: written '{file_path}' (security-check: passed)"
+    # backup existing content in case validation elsewhere needs rollback
+    if resolved.exists():
+        backup = resolved.with_suffix(resolved.suffix + ".backup_ai")
+        resolved.rename(backup)
+    target_tmp.rename(resolved)
+
+    # cleanup chunks
+    for p in chunks:
+        try:
+            p.unlink()
+        except Exception:
+            pass
+
+    return f"OK: written '{file_path}' (assembled from {len(chunks)} chunks)"
 
 
 async def tool_delete_file(file_path: str) -> str:
@@ -427,10 +469,10 @@ async def dispatch_tool(name: str, args: dict[str, Any]) -> Any:
         return await tool_list_files(str(dir_path))
 
     if name == "read_file":
-        file_path = args.get("file_path") or args.get("path") or args.get("filename")
-        if file_path is None:
-            raise ValueError("read_file requires 'file_path' parameter")
-        return await tool_read_file(str(file_path))
+        # Explicitly reject any attempt to call the removed full-file read tool.
+        raise ValueError(
+            "ReadFullFileDisabled: full file reads are not permitted. Use 'read_file_chunk' with 'start_line' and 'end_line'."
+        )
 
     if name == "read_file_chunk":
         file_path = args.get("file_path") or args.get("path") or args.get("filename")
@@ -443,7 +485,19 @@ async def dispatch_tool(name: str, args: dict[str, Any]) -> Any:
         return await tool_read_file_chunk(str(file_path), int(start_line), int(end_line))
 
     if name == "write_file":
-        return await tool_write_file(str(args["file_path"]), str(args["content"]))
+        # Reject direct full-file writes; instruct to use chunked writes instead.
+        raise ValueError(
+            "WriteFullFileDisabled: full file writes are not permitted. Use 'write_file_chunk' to upload in pieces and finalize."
+        )
+    if name == "write_file_chunk":
+        upload_id = args.get("upload_id") or args.get("id")
+        file_path = args.get("file_path") or args.get("path")
+        chunk_index = args.get("chunk_index")
+        content = args.get("content")
+        finalize = bool(args.get("finalize", False))
+        if upload_id is None or file_path is None or chunk_index is None or content is None:
+            raise ValueError("write_file_chunk requires 'upload_id','file_path','chunk_index','content'")
+        return await tool_write_file_chunk(str(upload_id), str(file_path), int(chunk_index), str(content), finalize)
     if name == "delete_file":
         return await tool_delete_file(str(args["file_path"]))
     if name == "rename_file":
@@ -460,8 +514,18 @@ def format_tool_failure(name: str, err: Exception) -> str:
         )
     if name == "read_file":
         return (
-            f"ReadFileError: {msg}. "
-            "Tip: use a project-relative file path, ensure the file exists, and avoid restricted files."
+            f"ReadFileDisabled: {msg}. "
+            "Full file reads are disabled; use 'read_file_chunk' with a specific line range."
+        )
+    if name == "write_file":
+        return (
+            f"WriteFileDisabled: {msg}. "
+            "Full file writes are disabled; use 'write_file_chunk' with an 'upload_id' and finalize when complete."
+        )
+    if name == "write_file_chunk":
+        return (
+            f"WriteFileChunkError: {msg}. "
+            "Tip: call with 'upload_id','file_path','chunk_index','content' and set 'finalize'=true on the last chunk."
         )
     if name == "read_file_chunk":
         return (
@@ -688,24 +752,19 @@ def setup_ai_routes(app: Quart, prefix: str = "/api/ai") -> None:
     cleaned = (prefix or "").rstrip("/")
     if not cleaned:
         cleaned = "/api/ai"
-    chat_path = f"{cleaned}/chat"
-    endpoint = f"ai_chat_{cleaned.strip('/').replace('/', '_') or 'root'}"
-    app.add_url_rule(chat_path, endpoint=endpoint, view_func=handle_chat, methods=["POST", "OPTIONS"])
+    raise RuntimeError(
+        "ai_controller.py is deprecated. Use server/ai/ai_controller_sse.py or the new HTTP controller instead."
+    )
 
 
 def start_http_server() -> None:
-    app = Quart(__name__)
-    setup_ai_routes(app, prefix="/api/ai")
-    app.add_url_rule("/<path:tail>", endpoint="ai_not_found", view_func=not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    app.add_url_rule("/", endpoint="ai_root_not_found", view_func=not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-
-    port = int(os.getenv("AI_PORT", "8082"))
-    LOGGER.info("HTTP chat server -> http://localhost:%s", port)
-    LOGGER.info("POST /api/ai/chat (SSE streaming)")
-    if AI_DEBUG_LOG_PATH:
-        LOGGER.info("debug logs file -> %s", AI_DEBUG_LOG_PATH)
-    app.run(host="0.0.0.0", port=port)
+    raise RuntimeError(
+        "ai_controller.py HTTP server is deprecated. Use server/ai/ai_controller_sse.py or the new HTTP controller instead."
+    )
 
 
 if __name__ == "__main__":
-    start_http_server()
+    LOGGER.error(
+        "ai_controller.py is deprecated and will not start. Use server/ai/ai_controller_sse.py instead."
+    )
+    raise SystemExit(2)
