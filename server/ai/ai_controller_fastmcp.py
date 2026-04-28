@@ -16,6 +16,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
+MAX_READ_FILE_SIZE_BYTES = int(__import__("os").environ.get("AI_MAX_READ_FILE_SIZE_BYTES", str(120 * 1024)))
 MAX_READ_CHUNK_LINES = 400
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -112,6 +113,16 @@ def list_files(dir_path: str = ".") -> str:
 @mcp.tool(description="Read the full content of a file (path relative to project root).")
 def read_file(file_path: str) -> str:
     resolved = assert_readable_path(file_path)
+    size = resolved.stat().st_size
+    if size > MAX_READ_FILE_SIZE_BYTES:
+        raise ValueError(
+            " ".join(
+                [
+                    f"file too large ({size} bytes > {MAX_READ_FILE_SIZE_BYTES} bytes)",
+                    "please read a smaller file or use read_file_chunk",
+                ]
+            )
+        )
     return resolved.read_text(encoding="utf-8")
 
 
