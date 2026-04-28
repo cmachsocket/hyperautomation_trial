@@ -82,7 +82,7 @@ LOGGER.propagate = False
 
 # In-memory store for tool results so we avoid embedding large tool outputs
 # directly into the messages list (which becomes part of the LLM context/tokens).
-# Store is small and FIFO; contents are retrievable via the `fetch_tool_result_chunk` tool.
+# Store is small and FIFO; tool results are stored and retrieved by id.
 TOOL_RESULT_STORE: "OrderedDict[str, dict]" = OrderedDict()
 TOOL_RESULT_STORE_MAX = int(os.getenv("AI_TOOL_RESULT_STORE_MAX", "20"))
 
@@ -99,21 +99,6 @@ def _store_tool_result(content: str) -> str:
         TOOL_RESULT_STORE.popitem(last=False)
     return rid
 
-
-def _fetch_tool_result_chunk(result_id: str, start_line: int, end_line: int) -> str:
-    info = TOOL_RESULT_STORE.get(result_id)
-    if info is None:
-        raise ValueError(f"unknown result_id: {result_id}")
-    lines = info["lines"]
-    total = len(lines)
-    if start_line < 1:
-        raise ValueError("start_line must be >= 1")
-    if end_line < start_line:
-        raise ValueError("end_line must be >= start_line")
-    if start_line > total:
-        return ""
-    safe_end = min(end_line, total)
-    return "\n".join(lines[start_line - 1 : safe_end])
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -222,22 +207,6 @@ LLM_TOOLS: list[dict[str, Any]] = [
                     "finalize": {"type": "boolean"},
                 },
                 "required": ["upload_id", "file_path", "chunk_index", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_tool_result_chunk",
-            "description": "Fetch a stored tool result by id, return a line-range (1-based inclusive).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "result_id": {"type": "string"},
-                    "start_line": {"type": "integer", "minimum": 1},
-                    "end_line": {"type": "integer", "minimum": 1}
-                },
-                "required": ["result_id", "start_line", "end_line"],
             },
         },
     },
@@ -530,14 +499,6 @@ async def dispatch_tool(name: str, args: dict[str, Any]) -> Any:
             raise ValueError("read_file_chunk requires 'start_line' and 'end_line' parameters")
         return await tool_read_file_chunk(str(file_path), int(start_line), int(end_line))
 
-    if name == "fetch_tool_result_chunk":
-        result_id = args.get("result_id")
-        start_line = args.get("start_line")
-        end_line = args.get("end_line")
-        if result_id is None or start_line is None or end_line is None:
-            raise ValueError("fetch_tool_result_chunk requires 'result_id','start_line','end_line'")
-        return _fetch_tool_result_chunk(str(result_id), int(start_line), int(end_line))
-
     if name == "write_file":
         # Reject direct full-file writes; instruct to use chunked writes instead.
         raise ValueError(
@@ -678,132 +639,97 @@ async def handle_chat() -> Response:
             *safe_history,
             {"role": "user", "content": user_message.strip()},
         ]
-        tool_call_rounds = 0
 
         try:
-            while True:
-                response = await client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=SYSTEM_PROMPT,
-                    messages=cast(Any, messages),
-                    tools=[
-                        {
-                            "name": tool["function"]["name"],
-                            "description": tool["function"]["description"],
-                            "input_schema": tool["function"]["parameters"],
-                        }
-                        for tool in LLM_TOOLS
-                    ],
+            response = await client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=SYSTEM_PROMPT,
+                messages=cast(Any, messages),
+                tools=[
+                    {
+                        "name": tool["function"]["name"],
+                        "description": tool["function"]["description"],
+                        "input_schema": tool["function"]["parameters"],
+                    }
+                    for tool in LLM_TOOLS
+                ],
+            )
+            stop_reason = getattr(response, "stop_reason", None)
+            LOGGER.debug("anthropic response stop_reason=%r", stop_reason)
+
+            assistant_text_parts: list[str] = []
+            tool_uses: list[dict[str, Any]] = []
+            for block in response.content or []:
+                if block.type == "text":
+                    assistant_text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_uses.append({"id": block.id, "name": block.name, "input": block.input})
+
+            assistant_content = "".join(assistant_text_parts)
+            if assistant_content:
+                LOGGER.debug("assistant text length=%d", len(assistant_content))
+                yield sse_bytes("token", {"text": assistant_content})
+
+            if stop_reason == "max_tokens":
+                LOGGER.warning(
+                    "response truncated by max_tokens=%s (tool_uses=%d)",
+                    max_tokens,
+                    len(tool_uses),
                 )
-                stop_reason = getattr(response, "stop_reason", None)
-                LOGGER.debug("anthropic response stop_reason=%r", stop_reason)
-
-                assistant_text_parts: list[str] = []
-                tool_uses: list[dict[str, Any]] = []
-                for block in response.content or []:
-                    if block.type == "text":
-                        assistant_text_parts.append(block.text)
-                    elif block.type == "tool_use":
-                        tool_uses.append(
-                            {"id": block.id, "name": block.name, "input": block.input}
-                        )
-
-                assistant_content = "".join(assistant_text_parts)
-                if assistant_content:
-                    LOGGER.debug("assistant text length=%d", len(assistant_content))
-                    yield sse_bytes("token", {"text": assistant_content})
-
-                if stop_reason == "max_tokens":
-                    LOGGER.warning(
-                        "response truncated by max_tokens=%s (tool_uses=%d)",
-                        max_tokens,
-                        len(tool_uses),
-                    )
-                    if "[TOOL_CALL]" in assistant_content and "[/TOOL_CALL]" not in assistant_content:
-                        yield sse_bytes(
-                            "error",
-                            {
-                                "message": (
-                                    "AI output truncated while generating tool call content. "
-                                    "Current MiniMax Anthropic-compatible max is 2048. "
-                                    "Please split the operation into smaller write steps and retry."
-                                )
-                            },
-                        )
-                        break
-
-                if not tool_uses:
-                    messages.append({"role": "assistant", "content": response.content})
-                    break
-
-                if len(tool_uses) > 1:
+                if "[TOOL_CALL]" in assistant_content and "[/TOOL_CALL]" not in assistant_content:
                     yield sse_bytes(
                         "error",
                         {
                             "message": (
-                                "Multiple tool calls in one assistant turn are blocked. "
-                                "Please use exactly one tool call per request, then continue with a follow-up if needed."
+                                "AI output truncated while generating tool call content. "
+                                "Current MiniMax Anthropic-compatible max is 2048. "
+                                "Please split the operation into smaller write steps and retry."
                             )
                         },
                     )
-                    break
+                    yield sse_bytes("done", {})
+                    return
 
-                tool_call_rounds += 1
-                if tool_call_rounds > MAX_TOOL_CALL_ROUNDS:
-                    yield sse_bytes(
-                        "error",
-                        {
-                            "message": (
-                                f"AI tool calls exceeded limit ({MAX_TOOL_CALL_ROUNDS}). "
-                                "Please try a more specific request."
-                            )
-                        },
-                    )
-                    break
+            if not tool_uses:
+                yield sse_bytes("done", {})
+                return
 
-                messages.append({"role": "assistant", "content": response.content})
-
-                for tc in tool_uses:
-                    raw_args = tc.get("input")
-                    args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
-                    LOGGER.debug("tool_start name=%s args_keys=%s", tc["name"], sorted(args.keys()))
-                    yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
-
-                    try:
-                        raw = await dispatch_tool(tc["name"], args)
-                        tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
-                        LOGGER.debug("tool_end name=%s status=ok", tc["name"])
-                    except Exception as err:
-                        LOGGER.exception("tool_end name=%s status=error", tc["name"])
-                        tool_result = format_tool_failure(tc["name"], err)
-
-                    yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
-                    # Store the full tool result server-side and only inject a compact
-                    # reference and short summary into the messages fed to the LLM to
-                    # avoid re-injecting large tool outputs into subsequent requests.
-                    try:
-                        result_id = _store_tool_result(tool_result)
-                        # Build a plain-text, LLM-safe reference message (avoid structured objects)
-                        lines = tool_result.splitlines()
-                        total_lines = len(lines)
-                        summary = tool_result if len(tool_result) <= 400 else tool_result[:400] + "..."
-                        ref_text = (
-                            f"[TOOL_RESULT_REF] id={result_id} lines={total_lines}\n"
-                            f"SUMMARY:\n{summary}\n"
-                            "To retrieve details, call the tool: fetch_tool_result_chunk(result_id=\"<id>\", start_line=<n>, end_line=<m>)."
+            if len(tool_uses) > 1:
+                yield sse_bytes(
+                    "error",
+                    {
+                        "message": (
+                            "Multiple tool calls in one assistant turn are blocked. "
+                            "Please use exactly one tool call per request, then continue with a follow-up if needed."
                         )
-                        messages.append({"role": "user", "content": ref_text})
-                    except Exception:
-                        # If storing fails for some reason, fall back to including the text inline
-                        fallback = tool_result if isinstance(tool_result, str) else json.dumps(tool_result, ensure_ascii=False)
-                        messages.append({"role": "user", "content": fallback})
+                    },
+                )
+                yield sse_bytes("done", {})
+                return
+
+            tc = tool_uses[0]
+            raw_args = tc.get("input")
+            args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
+            LOGGER.debug("tool_start name=%s args_keys=%s", tc["name"], sorted(args.keys()))
+            yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
+
+            try:
+                raw = await dispatch_tool(tc["name"], args)
+                tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
+                LOGGER.debug("tool_end name=%s status=ok", tc["name"])
+            except Exception as err:
+                LOGGER.exception("tool_end name=%s status=error", tc["name"])
+                tool_result = format_tool_failure(tc["name"], err)
+
+            yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
+            yield sse_bytes("done", {})
+            return
         except Exception as err:
             LOGGER.exception("event_stream failed")
             yield sse_bytes("error", {"message": str(err) or "LLM error"})
-
-        yield sse_bytes("done", {})
+            yield sse_bytes("done", {})
 
     return Response(
         event_stream(),
