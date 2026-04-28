@@ -86,7 +86,8 @@ fi
 
 if [[ "$START_MCP_VALUE" != "0" ]]; then
   echo "[start_servers] starting mcp stdio server"
-  echo "Press Ctrl+C to stop started services"
+  echo "[start_servers] mcp debug logs will appear below (via stderr):"
+  echo "---"
   if [[ "$PYTHON_RUNNER_VALUE" == "uv" ]]; then
     uv run --no-sync -- python -m server.ai.ai_controller_fastmcp
   else

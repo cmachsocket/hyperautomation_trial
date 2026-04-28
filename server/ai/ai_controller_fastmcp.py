@@ -10,18 +10,21 @@ This file is intentionally independent from ai_controller.py.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
 from typing import Any
 
 from fastmcp import FastMCP
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
-MAX_READ_FILE_SIZE_BYTES = int(__import__("os").environ.get("AI_MAX_READ_FILE_SIZE_BYTES", str(120 * 1024)))
+MAX_READ_FILE_SIZE_BYTES = int(os.environ.get("AI_MAX_READ_FILE_SIZE_BYTES", str(120 * 1024)))
 MAX_READ_CHUNK_LINES = 400
-DEBUG_MCP = (__import__("os").environ.get("AI_MCP_DEBUG", "1").strip() != "0")
+
+# 获取DEBUG标志 - 默认开启
+_AI_MCP_DEBUG_ENV = os.environ.get("AI_MCP_DEBUG", "1").strip()
+DEBUG_MCP = _AI_MCP_DEBUG_ENV not in ("0", "false", "False", "FALSE")
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -106,129 +109,169 @@ def validate_written_code_safety(file_path: str, content: str) -> None:
 
 @mcp.tool(description="List files in any project directory (read scope is whole project).")
 def list_files(dir_path: str = ".") -> str:
-    _debug_log("tool_start", {"name": "list_files", "dir_path": dir_path})
-    directory = assert_readable_path(dir_path)
-    entries: list[dict[str, Any]] = []
-    for item in sorted(directory.iterdir(), key=lambda p: p.name):
-        if item.resolve() in RESTRICTED_READ_PATHS:
-            continue
-        size_bytes = item.stat().st_size if item.is_file() else None
-        entries.append(
-            {
-                "name": item.name,
-                "type": "directory" if item.is_dir() else "file",
-                "path": str(item.relative_to(PROJECT_ROOT)) if item != PROJECT_ROOT else ".",
-                "size_bytes": size_bytes,
-            }
-        )
-    result = json.dumps(entries, ensure_ascii=False, indent=2)
-    _debug_log("tool_end", {"name": "list_files", "count": len(entries)})
-    return result
+    try:
+        _debug_log("tool_start", {"name": "list_files", "dir_path": dir_path})
+        directory = assert_readable_path(dir_path)
+        entries: list[dict[str, Any]] = []
+        for item in sorted(directory.iterdir(), key=lambda p: p.name):
+            if item.resolve() in RESTRICTED_READ_PATHS:
+                continue
+            size_bytes = item.stat().st_size if item.is_file() else None
+            entries.append(
+                {
+                    "name": item.name,
+                    "type": "directory" if item.is_dir() else "file",
+                    "path": str(item.relative_to(PROJECT_ROOT)) if item != PROJECT_ROOT else ".",
+                    "size_bytes": size_bytes,
+                }
+            )
+        result = json.dumps(entries, ensure_ascii=False, indent=2)
+        _debug_log("tool_end", {"name": "list_files", "count": len(entries)})
+        return result
+    except Exception as e:
+        _debug_log("tool_error", {"name": "list_files", "error": str(e)})
+        sys.stderr.flush()
+        raise
 
 
 @mcp.tool(description="Read the full content of a file (path relative to project root).")
 def read_file(file_path: str) -> str:
-    _debug_log("tool_start", {"name": "read_file", "file_path": file_path})
-    resolved = assert_readable_path(file_path)
-    size = resolved.stat().st_size
-    if size > MAX_READ_FILE_SIZE_BYTES:
-        raise ValueError(
-            " ".join(
-                [
-                    f"file too large ({size} bytes > {MAX_READ_FILE_SIZE_BYTES} bytes)",
-                    "please read a smaller file or use read_file_chunk",
-                ]
+    try:
+        _debug_log("tool_start", {"name": "read_file", "file_path": file_path})
+        resolved = assert_readable_path(file_path)
+        size = resolved.stat().st_size
+        if size > MAX_READ_FILE_SIZE_BYTES:
+            raise ValueError(
+                " ".join(
+                    [
+                        f"file too large ({size} bytes > {MAX_READ_FILE_SIZE_BYTES} bytes)",
+                        "please read a smaller file or use read_file_chunk",
+                    ]
+                )
             )
-        )
-    content = resolved.read_text(encoding="utf-8")
-    _debug_log("tool_end", {"name": "read_file", "size_bytes": size})
-    return content
+        content = resolved.read_text(encoding="utf-8")
+        _debug_log("tool_end", {"name": "read_file", "size_bytes": size})
+        return content
+    except Exception as e:
+        _debug_log("tool_error", {"name": "read_file", "file_path": file_path, "error": str(e)})
+        sys.stderr.flush()
+        raise
 
 
 @mcp.tool(description="Read a file by line range (1-based, inclusive).")
 def read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
-    _debug_log(
-        "tool_start",
-        {"name": "read_file_chunk", "file_path": file_path, "start_line": start_line, "end_line": end_line},
-    )
-    resolved = assert_readable_path(file_path)
-
-    if start_line < 1 or end_line < 1:
-        raise ValueError("start_line and end_line must be >= 1")
-    if end_line < start_line:
-        raise ValueError("end_line must be >= start_line")
-
-    line_count = end_line - start_line + 1
-    if line_count > MAX_READ_CHUNK_LINES:
-        raise ValueError(
-            f"requested too many lines ({line_count} > {MAX_READ_CHUNK_LINES}), please narrow the range"
+    try:
+        _debug_log(
+            "tool_start",
+            {"name": "read_file_chunk", "file_path": file_path, "start_line": start_line, "end_line": end_line},
         )
+        resolved = assert_readable_path(file_path)
 
-    lines = resolved.read_text(encoding="utf-8").splitlines()
-    total = len(lines)
-    if start_line > total:
-        return ""
+        if start_line < 1 or end_line < 1:
+            raise ValueError("start_line and end_line must be >= 1")
+        if end_line < start_line:
+            raise ValueError("end_line must be >= start_line")
 
-    safe_end = min(end_line, total)
-    chunk = lines[start_line - 1 : safe_end]
-    result = "\n".join(chunk)
-    _debug_log("tool_end", {"name": "read_file_chunk", "lines": len(chunk)})
-    return result
+        line_count = end_line - start_line + 1
+        if line_count > MAX_READ_CHUNK_LINES:
+            raise ValueError(
+                f"requested too many lines ({line_count} > {MAX_READ_CHUNK_LINES}), please narrow the range"
+            )
+
+        lines = resolved.read_text(encoding="utf-8").splitlines()
+        total = len(lines)
+        if start_line > total:
+            return ""
+
+        safe_end = min(end_line, total)
+        chunk = lines[start_line - 1 : safe_end]
+        result = "\n".join(chunk)
+        _debug_log("tool_end", {"name": "read_file_chunk", "lines": len(chunk)})
+        return result
+    except Exception as e:
+        _debug_log("tool_error", {"name": "read_file_chunk", "file_path": file_path, "error": str(e)})
+        sys.stderr.flush()
+        raise
 
 
 @mcp.tool(description="Create or overwrite a file, but only inside src/scripts or src/components/dynamic.")
 def write_file(file_path: str, content: str) -> str:
-    _debug_log("tool_start", {"name": "write_file", "file_path": file_path})
-    resolved = assert_writable_path(file_path)
-    existed_before = resolved.exists()
-    previous_content = ""
-
-    if existed_before:
-        previous_content = resolved.read_text(encoding="utf-8")
-
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(content, encoding="utf-8")
-
     try:
-        validate_written_code_safety(file_path, content)
-    except Exception as err:
-        if existed_before:
-            resolved.write_text(previous_content, encoding="utf-8")
-        elif resolved.exists():
-            resolved.unlink()
-        raise SecurityValidationError(
-            f"Security check failed for '{file_path}': {err}. Write has been rolled back."
-        ) from err
+        _debug_log("tool_start", {"name": "write_file", "file_path": file_path})
+        resolved = assert_writable_path(file_path)
+        existed_before = resolved.exists()
+        previous_content = ""
 
-    _debug_log("tool_end", {"name": "write_file", "file_path": file_path})
-    return f"OK: written '{file_path}' (security-check: passed)"
+        if existed_before:
+            previous_content = resolved.read_text(encoding="utf-8")
+
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content, encoding="utf-8")
+
+        try:
+            validate_written_code_safety(file_path, content)
+        except Exception as err:
+            if existed_before:
+                resolved.write_text(previous_content, encoding="utf-8")
+            elif resolved.exists():
+                resolved.unlink()
+            raise SecurityValidationError(
+                f"Security check failed for '{file_path}': {err}. Write has been rolled back."
+            ) from err
+
+        _debug_log("tool_end", {"name": "write_file", "file_path": file_path})
+        return f"OK: written '{file_path}' (security-check: passed)"
+    except Exception as e:
+        _debug_log("tool_error", {"name": "write_file", "file_path": file_path, "error": str(e)})
+        sys.stderr.flush()
+        raise
 
 
 @mcp.tool(description="Delete a file, but only inside src/scripts or src/components/dynamic.")
 def delete_file(file_path: str) -> str:
-    _debug_log("tool_start", {"name": "delete_file", "file_path": file_path})
-    resolved = assert_writable_path(file_path)
-    resolved.unlink()
-    _debug_log("tool_end", {"name": "delete_file", "file_path": file_path})
-    return f"OK: deleted '{file_path}'"
+    try:
+        _debug_log("tool_start", {"name": "delete_file", "file_path": file_path})
+        resolved = assert_writable_path(file_path)
+        resolved.unlink()
+        _debug_log("tool_end", {"name": "delete_file", "file_path": file_path})
+        return f"OK: deleted '{file_path}'"
+    except Exception as e:
+        _debug_log("tool_error", {"name": "delete_file", "file_path": file_path, "error": str(e)})
+        sys.stderr.flush()
+        raise
 
 
 @mcp.tool(description="Rename or move a file, but only inside src/scripts or src/components/dynamic.")
 def rename_file(from_path: str, to_path: str) -> str:
-    _debug_log("tool_start", {"name": "rename_file", "from_path": from_path, "to_path": to_path})
-    resolved_from = assert_writable_path(from_path)
-    resolved_to = assert_writable_path(to_path)
-    resolved_to.parent.mkdir(parents=True, exist_ok=True)
-    resolved_from.rename(resolved_to)
-    _debug_log("tool_end", {"name": "rename_file", "from_path": from_path, "to_path": to_path})
-    return f"OK: renamed '{from_path}' -> '{to_path}'"
+    try:
+        _debug_log("tool_start", {"name": "rename_file", "from_path": from_path, "to_path": to_path})
+        resolved_from = assert_writable_path(from_path)
+        resolved_to = assert_writable_path(to_path)
+        resolved_to.parent.mkdir(parents=True, exist_ok=True)
+        resolved_from.rename(resolved_to)
+        _debug_log("tool_end", {"name": "rename_file", "from_path": from_path, "to_path": to_path})
+        return f"OK: renamed '{from_path}' -> '{to_path}'"
+    except Exception as e:
+        _debug_log("tool_error", {"name": "rename_file", "from_path": from_path, "to_path": to_path, "error": str(e)})
+        sys.stderr.flush()
+        raise
 
 
 if __name__ == "__main__":
-    _debug_log("startup", {"project_root": str(PROJECT_ROOT)})
+    # 始终打印启动信息到stderr（不受DEBUG_MCP控制）
+    startup_msg = {
+        "status": "starting",
+        "debug_enabled": DEBUG_MCP,
+        "debug_env": _AI_MCP_DEBUG_ENV,
+        "project_root": str(PROJECT_ROOT),
+    }
+    print(f"[mcp] startup {startup_msg}", file=sys.stderr, flush=True)
+    
+    _debug_log("startup", startup_msg)
     try:
         mcp.run(transport="stdio")
     except Exception as e:
         _debug_log("fatal_error", {"exception": str(e), "type": type(e).__name__})
+        print(f"[mcp] FATAL ERROR: {e}", file=sys.stderr, flush=True)
         sys.stderr.flush()
         raise
