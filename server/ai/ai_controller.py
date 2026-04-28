@@ -14,6 +14,9 @@ Env vars:
                                      Set to http://localhost:11434/v1 for Ollama, etc.
     AI_MODEL         Model name (default: gpt-4o-mini)
 
+Env loading order:
+    .env is loaded first, then local.env overrides it.
+
 Chat request body:  { message: string, history?: {role,content}[] }
 SSE events:
     token      - streaming text chunk  { text }

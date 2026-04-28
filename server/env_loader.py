@@ -36,5 +36,7 @@ def load_env_files(project_root: Path) -> None:
             if not parsed:
                 continue
             key, value = parsed
-            # Do not override variables already provided by process manager/shell.
-            os.environ.setdefault(key, value)
+            # Allow later files to override earlier ones so local.env can win over .env.
+            if key in os.environ and name != "local.env":
+                continue
+            os.environ[key] = value
