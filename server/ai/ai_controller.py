@@ -65,6 +65,9 @@ DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bprocess\.exit\s*\(", re.MULTILINE), "process termination is forbidden"),
 ]
 
+CUSTOM_INVOKE_RE = re.compile(r"<invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</invoke>", re.IGNORECASE | re.DOTALL)
+CUSTOM_PARAMETER_RE = re.compile(r"<parameter\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</parameter>", re.IGNORECASE | re.DOTALL)
+
 
 class SecurityValidationError(Exception):
     def __init__(self, file_path: str, reason: str) -> None:
@@ -401,6 +404,35 @@ def _mask_secret(value: str, head: int = 4, tail: int = 4) -> str:
     return f"{value[:head]}...{value[-tail:]}"
 
 
+def _uses_text_tool_calls(model: str, base_url: str) -> bool:
+    combined = f"{model} {base_url}".lower()
+    return "minimax" in combined or "modelscope" in combined
+
+
+def _extract_text_tool_calls(content: str) -> tuple[list[dict[str, str]], str]:
+    tool_calls: list[dict[str, str]] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1).strip()
+        body = match.group(2)
+        if not name:
+            return ""
+
+        arguments: dict[str, str] = {}
+        for parameter_match in CUSTOM_PARAMETER_RE.finditer(body):
+            param_name = parameter_match.group(1).strip()
+            param_value = parameter_match.group(2).strip()
+            if param_name:
+                arguments[param_name] = param_value
+
+        tool_calls.append({"id": "", "name": name, "arguments": json.dumps(arguments, ensure_ascii=False)})
+        return ""
+
+    cleaned = CUSTOM_INVOKE_RE.sub(_replace, content)
+    cleaned = cleaned.replace("[TOOL_CALL]", "").strip()
+    return tool_calls, cleaned
+
+
 async def handle_chat() -> Response:
     if request.method == "OPTIONS":
         return Response(status=204, headers={**CORS_HEADERS})
@@ -451,6 +483,7 @@ async def handle_chat() -> Response:
         )
         model = os.getenv("AI_MODEL", "gpt-4o-mini")
         resolved_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        text_tool_call_mode = _uses_text_tool_calls(model, resolved_base_url)
         print(
             "[ai_controller] upstream request config: "
             f"base_url={resolved_base_url!r}, "
@@ -485,7 +518,8 @@ async def handle_chat() -> Response:
                     content = _get_value(delta, "content")
                     if isinstance(content, str) and content:
                         assistant_content += content
-                        yield sse_bytes("token", {"text": content})
+                        if not text_tool_call_mode:
+                            yield sse_bytes("token", {"text": content})
 
                     tool_calls = _get_value(delta, "tool_calls")
                     if not tool_calls:
@@ -510,6 +544,13 @@ async def handle_chat() -> Response:
                             tool_calls_accum[idx]["arguments"] += fn_arguments
 
                 tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
+
+                if not tool_calls and text_tool_call_mode:
+                    tool_calls, assistant_content = _extract_text_tool_calls(assistant_content)
+                    if assistant_content:
+                        yield sse_bytes("token", {"text": assistant_content})
+                elif text_tool_call_mode and assistant_content:
+                    yield sse_bytes("token", {"text": assistant_content})
 
                 if not tool_calls:
                     messages.append({"role": "assistant", "content": assistant_content})
