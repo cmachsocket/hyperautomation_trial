@@ -522,83 +522,129 @@ async def handle_chat() -> Response:
             temperature,
         )
 
+        # Build initial messages list (system + user)
         messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
             *safe_history,
             {"role": "user", "content": user_message.strip()},
         ]
 
         try:
-            response = await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=SYSTEM_PROMPT,
-                messages=cast(Any, messages),
-                tools=[
-                    {
-                        "name": tool["function"]["name"],
-                        "description": tool["function"]["description"],
-                        "input_schema": tool["function"]["parameters"],
-                    }
-                    for tool in LLM_TOOLS
-                ],
-            )
-            stop_reason = getattr(response, "stop_reason", None)
-            LOGGER.debug("anthropic response stop_reason=%r", stop_reason)
+            for round_idx in range(MAX_TOOL_CALL_ROUNDS):
+                LOGGER.debug("llm round %d, messages count=%d", round_idx, len(messages))
 
-            assistant_text_parts: list[str] = []
-            tool_uses: list[dict[str, Any]] = []
-            for block in response.content or []:
-                if block.type == "text":
-                    assistant_text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_uses.append({"id": block.id, "name": block.name, "input": block.input})
-
-            assistant_content = "".join(assistant_text_parts)
-            if assistant_content:
-                LOGGER.debug("assistant text length=%d", len(assistant_content))
-                yield sse_bytes("token", {"text": assistant_content})
-
-            if stop_reason == "max_tokens":
-                LOGGER.warning(
-                    "response truncated by max_tokens=%s (tool_uses=%d)",
-                    max_tokens,
-                    len(tool_uses),
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=cast(Any, messages),
+                    tools=[
+                        {
+                            "name": tool["function"]["name"],
+                            "description": tool["function"]["description"],
+                            "input_schema": tool["function"]["parameters"],
+                        }
+                        for tool in LLM_TOOLS
+                    ],
                 )
-                if "[TOOL_CALL]" in assistant_content and "[/TOOL_CALL]" not in assistant_content:
+                stop_reason = getattr(response, "stop_reason", None)
+                LOGGER.debug("anthropic response round %d stop_reason=%r", round_idx, stop_reason)
+
+                assistant_text_parts: list[str] = []
+                tool_uses: list[dict[str, Any]] = []
+                for block in response.content or []:
+                    if block.type == "text":
+                        assistant_text_parts.append(block.text)
+                    elif block.type == "tool_use":
+                        tool_uses.append({"id": block.id, "name": block.name, "input": block.input})
+
+                assistant_content = "".join(assistant_text_parts)
+                if assistant_content:
+                    LOGGER.debug("assistant text length=%d", len(assistant_content))
+                    yield sse_bytes("token", {"text": assistant_content})
+
+                if stop_reason == "max_tokens":
+                    LOGGER.warning(
+                        "response truncated by max_tokens=%s at round %d",
+                        max_tokens,
+                        round_idx,
+                    )
                     yield sse_bytes(
                         "error",
                         {
                             "message": (
-                                "AI output truncated while generating tool call content. "
-                                "Current MiniMax Anthropic-compatible max is 2048. "
-                                "Please split the operation into smaller write steps and retry."
+                                "AI output truncated by max_tokens limit. "
+                                "Consider increasing AI_MAX_TOKENS or splitting the operation."
                             )
                         },
                     )
                     yield sse_bytes("done", {})
                     return
 
-            if not tool_uses:
-                yield sse_bytes("done", {})
-                return
+                if not tool_uses:
+                    yield sse_bytes("done", {})
+                    return
 
-            for tc in tool_uses:
-                raw_args = tc.get("input")
-                args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
-                LOGGER.debug("tool_start name=%s args_keys=%s", tc["name"], sorted(args.keys()))
-                yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
+                # Keep only the latest exchange to avoid context bloat.
+                if round_idx > 0:
+                    messages = messages[-4:]
 
-                try:
-                    raw = await dispatch_tool(tc["name"], args)
-                    tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
-                    LOGGER.debug("tool_end name=%s status=ok", tc["name"])
-                except Exception as err:
-                    LOGGER.exception("tool_end name=%s status=error", tc["name"])
-                    tool_result = format_tool_failure(tc["name"], err)
+                # Process each tool use and append to messages history.
+                for tc in tool_uses:
+                    raw_args = tc["input"]
+                    args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
+                    LOGGER.debug("tool_start round %d name=%s", round_idx, tc["name"])
+                    yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
 
-                yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
+                    try:
+                        raw = await dispatch_tool(tc["name"], args)
+                        tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
+                        LOGGER.debug("tool_end name=%s status=ok", tc["name"])
+                    except Exception as err:
+                        LOGGER.exception("tool_end name=%s status=error", tc["name"])
+                        tool_result = format_tool_failure(tc["name"], err)
 
+                    yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
+
+                    result_preview = tool_result[:200] + ("..." if len(tool_result) > 200 else "")
+                    LOGGER.debug(
+                        "[ROUND %d] tool_end name=%s result_len=%d preview=%r messages_count=%d",
+                        round_idx,
+                        tc["name"],
+                        len(tool_result),
+                        result_preview,
+                        len(messages) + 2,  # +2 for the entries we are about to append
+                    )
+
+                    # Append assistant tool_use + tool result to messages
+                    messages.append({
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": tc["id"],
+                                "name": tc["name"],
+                                "input": tc["input"],
+                            }
+                        ],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "content": tool_result,
+                        "tool_use_id": tc["id"],
+                    })
+
+            # Exceeded MAX_TOOL_CALL_ROUNDS
+            LOGGER.warning("exceeded MAX_TOOL_CALL_ROUNDS=%d", MAX_TOOL_CALL_ROUNDS)
+            yield sse_bytes(
+                "error",
+                {
+                    "message": (
+                        f"Too many tool call rounds (>{MAX_TOOL_CALL_ROUNDS}). "
+                        "The task may have entered an infinite loop. Please retry or simplify the request."
+                    )
+                },
+            )
             yield sse_bytes("done", {})
             return
         except Exception as err:
