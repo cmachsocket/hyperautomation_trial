@@ -48,6 +48,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_env_files(PROJECT_ROOT)
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
+MAX_READ_FILE_SIZE_BYTES = int(os.getenv("AI_MAX_READ_FILE_SIZE_BYTES", str(120 * 1024)))
+MAX_READ_CHUNK_LINES = int(os.getenv("AI_MAX_READ_CHUNK_LINES", "400"))
 MAX_TOOL_CALL_ROUNDS = int(os.getenv("AI_MAX_TOOL_CALL_ROUNDS", "20"))
 AUTH_TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "hyperautomation-dev-secret")
 NOISY_DIR_NAMES = {".git", "node_modules", "__pycache__", "dist"}
@@ -137,6 +139,22 @@ LLM_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {"file_path": {"type": "string"}},
                 "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file_chunk",
+            "description": "Read a file by line range (1-based, inclusive).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "start_line": {"type": "integer", "minimum": 1},
+                    "end_line": {"type": "integer", "minimum": 1},
+                },
+                "required": ["file_path", "start_line", "end_line"],
             },
         },
     },
@@ -286,7 +304,41 @@ async def tool_list_files(dir_path: str = ".") -> list[dict[str, str]]:
 
 async def tool_read_file(file_path: str) -> str:
     resolved = assert_readable_path(file_path)
+    size = resolved.stat().st_size
+    if size > MAX_READ_FILE_SIZE_BYTES:
+        raise ValueError(
+            " ".join(
+                [
+                    f"file too large ({size} bytes > {MAX_READ_FILE_SIZE_BYTES} bytes)",
+                    "please read a smaller file or ask for a targeted excerpt",
+                ]
+            )
+        )
     return resolved.read_text(encoding="utf-8")
+
+
+async def tool_read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
+    resolved = assert_readable_path(file_path)
+
+    if start_line < 1 or end_line < 1:
+        raise ValueError("start_line and end_line must be >= 1")
+    if end_line < start_line:
+        raise ValueError("end_line must be >= start_line")
+
+    line_count = end_line - start_line + 1
+    if line_count > MAX_READ_CHUNK_LINES:
+        raise ValueError(
+            f"requested too many lines ({line_count} > {MAX_READ_CHUNK_LINES}), please narrow the range"
+        )
+
+    lines = resolved.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    if start_line > total:
+        return ""
+
+    safe_end = min(end_line, total)
+    chunk = lines[start_line - 1 : safe_end]
+    return "\n".join(chunk)
 
 
 def validate_written_code_safety(file_path: str, content: str) -> None:
@@ -346,9 +398,25 @@ async def tool_rename_file(from_path: str, to_path: str) -> str:
 
 async def dispatch_tool(name: str, args: dict[str, Any]) -> Any:
     if name == "list_files":
-        return await tool_list_files(args.get("dir_path", "."))
+        dir_path = args.get("dir_path") or args.get("path") or args.get("directory") or "."
+        return await tool_list_files(str(dir_path))
+
     if name == "read_file":
-        return await tool_read_file(str(args["file_path"]))
+        file_path = args.get("file_path") or args.get("path") or args.get("filename")
+        if file_path is None:
+            raise ValueError("read_file requires 'file_path' parameter")
+        return await tool_read_file(str(file_path))
+
+    if name == "read_file_chunk":
+        file_path = args.get("file_path") or args.get("path") or args.get("filename")
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+        if file_path is None:
+            raise ValueError("read_file_chunk requires 'file_path' parameter")
+        if start_line is None or end_line is None:
+            raise ValueError("read_file_chunk requires 'start_line' and 'end_line' parameters")
+        return await tool_read_file_chunk(str(file_path), int(start_line), int(end_line))
+
     if name == "write_file":
         return await tool_write_file(str(args["file_path"]), str(args["content"]))
     if name == "delete_file":
@@ -369,6 +437,11 @@ def format_tool_failure(name: str, err: Exception) -> str:
         return (
             f"ReadFileError: {msg}. "
             "Tip: use a project-relative file path, ensure the file exists, and avoid restricted files."
+        )
+    if name == "read_file_chunk":
+        return (
+            f"ReadFileChunkError: {msg}. "
+            "Tip: use 1-based inclusive line range and keep chunk size small."
         )
     if name == "write_file" and isinstance(err, SecurityValidationError):
         return f"SecurityValidationError: {msg}"

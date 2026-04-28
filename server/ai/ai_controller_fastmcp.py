@@ -16,6 +16,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
+MAX_READ_CHUNK_LINES = 400
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -112,6 +113,31 @@ def list_files(dir_path: str = ".") -> str:
 def read_file(file_path: str) -> str:
     resolved = assert_readable_path(file_path)
     return resolved.read_text(encoding="utf-8")
+
+
+@mcp.tool(description="Read a file by line range (1-based, inclusive).")
+def read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
+    resolved = assert_readable_path(file_path)
+
+    if start_line < 1 or end_line < 1:
+        raise ValueError("start_line and end_line must be >= 1")
+    if end_line < start_line:
+        raise ValueError("end_line must be >= start_line")
+
+    line_count = end_line - start_line + 1
+    if line_count > MAX_READ_CHUNK_LINES:
+        raise ValueError(
+            f"requested too many lines ({line_count} > {MAX_READ_CHUNK_LINES}), please narrow the range"
+        )
+
+    lines = resolved.read_text(encoding="utf-8").splitlines()
+    total = len(lines)
+    if start_line > total:
+        return ""
+
+    safe_end = min(end_line, total)
+    chunk = lines[start_line - 1 : safe_end]
+    return "\n".join(chunk)
 
 
 @mcp.tool(description="Create or overwrite a file, but only inside src/scripts or src/components/dynamic.")
