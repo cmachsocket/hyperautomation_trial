@@ -40,12 +40,16 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(sys.stderr),
     ],
+    force=True,
 )
 logger = logging.getLogger("mcp")
+logger.setLevel(logging.DEBUG if DEBUG_MCP else logging.INFO)
+logger.propagate = False
 
 # 禁用其他库的日志噪音
 logging.getLogger("fastmcp").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.INFO)
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
