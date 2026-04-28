@@ -583,34 +583,22 @@ async def handle_chat() -> Response:
                 yield sse_bytes("done", {})
                 return
 
-            if len(tool_uses) > 1:
-                yield sse_bytes(
-                    "error",
-                    {
-                        "message": (
-                            "Multiple tool calls in one assistant turn are blocked. "
-                            "Please use exactly one tool call per request, then continue with a follow-up if needed."
-                        )
-                    },
-                )
-                yield sse_bytes("done", {})
-                return
+            for tc in tool_uses:
+                raw_args = tc.get("input")
+                args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
+                LOGGER.debug("tool_start name=%s args_keys=%s", tc["name"], sorted(args.keys()))
+                yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
 
-            tc = tool_uses[0]
-            raw_args = tc.get("input")
-            args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
-            LOGGER.debug("tool_start name=%s args_keys=%s", tc["name"], sorted(args.keys()))
-            yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
+                try:
+                    raw = await dispatch_tool(tc["name"], args)
+                    tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
+                    LOGGER.debug("tool_end name=%s status=ok", tc["name"])
+                except Exception as err:
+                    LOGGER.exception("tool_end name=%s status=error", tc["name"])
+                    tool_result = format_tool_failure(tc["name"], err)
 
-            try:
-                raw = await dispatch_tool(tc["name"], args)
-                tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
-                LOGGER.debug("tool_end name=%s status=ok", tc["name"])
-            except Exception as err:
-                LOGGER.exception("tool_end name=%s status=error", tc["name"])
-                tool_result = format_tool_failure(tc["name"], err)
+                yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
 
-            yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
             yield sse_bytes("done", {})
             return
         except Exception as err:
