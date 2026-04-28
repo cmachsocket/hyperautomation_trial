@@ -42,6 +42,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, cast
+import uuid
+from collections import OrderedDict
 
 from anthropic import AsyncAnthropic
 from quart import Quart, Response, request
@@ -77,6 +79,41 @@ if not LOGGER.handlers:
             LOGGER.warning("cannot open AI_DEBUG_LOG_PATH=%r: %s", AI_DEBUG_LOG_PATH, err)
 LOGGER.setLevel(logging.DEBUG if AI_DEBUG else logging.INFO)
 LOGGER.propagate = False
+
+# In-memory store for tool results so we avoid embedding large tool outputs
+# directly into the messages list (which becomes part of the LLM context/tokens).
+# Store is small and FIFO; contents are retrievable via the `fetch_tool_result_chunk` tool.
+TOOL_RESULT_STORE: "OrderedDict[str, dict]" = OrderedDict()
+TOOL_RESULT_STORE_MAX = int(os.getenv("AI_TOOL_RESULT_STORE_MAX", "20"))
+
+
+def _store_tool_result(content: str) -> str:
+    rid = uuid.uuid4().hex
+    TOOL_RESULT_STORE[rid] = {
+        "content": content,
+        "len_chars": len(content),
+        "lines": content.splitlines(),
+        "created": time.time(),
+    }
+    while len(TOOL_RESULT_STORE) > TOOL_RESULT_STORE_MAX:
+        TOOL_RESULT_STORE.popitem(last=False)
+    return rid
+
+
+def _fetch_tool_result_chunk(result_id: str, start_line: int, end_line: int) -> str:
+    info = TOOL_RESULT_STORE.get(result_id)
+    if info is None:
+        raise ValueError(f"unknown result_id: {result_id}")
+    lines = info["lines"]
+    total = len(lines)
+    if start_line < 1:
+        raise ValueError("start_line must be >= 1")
+    if end_line < start_line:
+        raise ValueError("end_line must be >= start_line")
+    if start_line > total:
+        return ""
+    safe_end = min(end_line, total)
+    return "\n".join(lines[start_line - 1 : safe_end])
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -185,6 +222,22 @@ LLM_TOOLS: list[dict[str, Any]] = [
                     "finalize": {"type": "boolean"},
                 },
                 "required": ["upload_id", "file_path", "chunk_index", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_tool_result_chunk",
+            "description": "Fetch a stored tool result by id, return a line-range (1-based inclusive).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "result_id": {"type": "string"},
+                    "start_line": {"type": "integer", "minimum": 1},
+                    "end_line": {"type": "integer", "minimum": 1}
+                },
+                "required": ["result_id", "start_line", "end_line"],
             },
         },
     },
@@ -477,6 +530,14 @@ async def dispatch_tool(name: str, args: dict[str, Any]) -> Any:
             raise ValueError("read_file_chunk requires 'start_line' and 'end_line' parameters")
         return await tool_read_file_chunk(str(file_path), int(start_line), int(end_line))
 
+    if name == "fetch_tool_result_chunk":
+        result_id = args.get("result_id")
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+        if result_id is None or start_line is None or end_line is None:
+            raise ValueError("fetch_tool_result_chunk requires 'result_id','start_line','end_line'")
+        return _fetch_tool_result_chunk(str(result_id), int(start_line), int(end_line))
+
     if name == "write_file":
         # Reject direct full-file writes; instruct to use chunked writes instead.
         raise ValueError(
@@ -719,18 +780,42 @@ async def handle_chat() -> Response:
                         tool_result = format_tool_failure(tc["name"], err)
 
                     yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": tc["id"],
-                                    "content": tool_result,
-                                }
-                            ],
-                        }
-                    )
+                    # Store the full tool result server-side and only inject a compact
+                    # reference and short summary into the messages fed to the LLM to
+                    # avoid re-injecting large tool outputs into subsequent requests.
+                    try:
+                        result_id = _store_tool_result(tool_result)
+                        lines = tool_result.splitlines()
+                        total_lines = len(lines)
+                        summary = tool_result if len(tool_result) <= 200 else tool_result[:200] + "..."
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result_ref",
+                                        "tool_use_id": tc["id"],
+                                        "result_id": result_id,
+                                        "summary": summary,
+                                        "lines": total_lines,
+                                    }
+                                ],
+                            }
+                        )
+                    except Exception:
+                        # If storing fails for some reason, fall back to the old behavior
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": tc["id"],
+                                        "content": tool_result,
+                                    }
+                                ],
+                            }
+                        )
         except Exception as err:
             LOGGER.exception("event_stream failed")
             yield sse_bytes("error", {"message": str(err) or "LLM error"})
