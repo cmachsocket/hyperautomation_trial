@@ -90,15 +90,15 @@ fi
 if [[ "$START_MCP_VALUE" != "0" ]]; then
   echo ""
   echo "================================"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting MCP stdio server"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting MCP stdio server (improved)"
   echo "================================"
   echo ""
   if [[ "$PYTHON_RUNNER_VALUE" == "uv" ]]; then
-    # 用 -u 标志禁用 Python 的输出缓冲
-    uv run --no-sync -- python -u -m server.ai.ai_controller_fastmcp
+    # 用 -u 标志禁用 Python 的输出缓冲，运行新的MCP实现
+    uv run --no-sync -- python -u -m server.ai.ai_controller_sse
   else
-    # 用 -u 标志禁用 Python 的输出缓冲
-    "$PYTHON_RUNNER_VALUE" -u -m server.ai.ai_controller_fastmcp
+    # 用 -u 标志禁用 Python 的输出缓冲，运行新的MCP实现
+    "$PYTHON_RUNNER_VALUE" -u -m server.ai.ai_controller_sse
   fi
   exit $?
 fi
