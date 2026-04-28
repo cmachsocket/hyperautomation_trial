@@ -393,6 +393,14 @@ def _get_value(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
+def _mask_secret(value: str, head: int = 4, tail: int = 4) -> str:
+    if not value:
+        return "<empty>"
+    if len(value) <= head + tail:
+        return "*" * len(value)
+    return f"{value[:head]}...{value[-tail:]}"
+
+
 async def handle_chat() -> Response:
     if request.method == "OPTIONS":
         return Response(status=204, headers={**CORS_HEADERS})
@@ -442,6 +450,13 @@ async def handle_chat() -> Response:
             base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         )
         model = os.getenv("AI_MODEL", "gpt-4o-mini")
+        resolved_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        print(
+            "[ai_controller] upstream request config: "
+            f"base_url={resolved_base_url!r}, "
+            f"api_key={_mask_secret(api_key)!r}, "
+            f"model={model!r}"
+        )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
