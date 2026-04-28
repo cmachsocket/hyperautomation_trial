@@ -785,37 +785,20 @@ async def handle_chat() -> Response:
                     # avoid re-injecting large tool outputs into subsequent requests.
                     try:
                         result_id = _store_tool_result(tool_result)
+                        # Build a plain-text, LLM-safe reference message (avoid structured objects)
                         lines = tool_result.splitlines()
                         total_lines = len(lines)
-                        summary = tool_result if len(tool_result) <= 200 else tool_result[:200] + "..."
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "tool_result_ref",
-                                        "tool_use_id": tc["id"],
-                                        "result_id": result_id,
-                                        "summary": summary,
-                                        "lines": total_lines,
-                                    }
-                                ],
-                            }
+                        summary = tool_result if len(tool_result) <= 400 else tool_result[:400] + "..."
+                        ref_text = (
+                            f"[TOOL_RESULT_REF] id={result_id} lines={total_lines}\n"
+                            f"SUMMARY:\n{summary}\n"
+                            "To retrieve details, call the tool: fetch_tool_result_chunk(result_id=\"<id>\", start_line=<n>, end_line=<m>)."
                         )
+                        messages.append({"role": "user", "content": ref_text})
                     except Exception:
-                        # If storing fails for some reason, fall back to the old behavior
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": tc["id"],
-                                        "content": tool_result,
-                                    }
-                                ],
-                            }
-                        )
+                        # If storing fails for some reason, fall back to including the text inline
+                        fallback = tool_result if isinstance(tool_result, str) else json.dumps(tool_result, ensure_ascii=False)
+                        messages.append({"role": "user", "content": fallback})
         except Exception as err:
             LOGGER.exception("event_stream failed")
             yield sse_bytes("error", {"message": str(err) or "LLM error"})
