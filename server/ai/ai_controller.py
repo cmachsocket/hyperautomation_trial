@@ -2,7 +2,7 @@
 ai_controller.py
 
 HTTP Chat Server (standalone):
-    python server/ai_controller.py
+    python server/ai/ai_controller.py
     POST /api/ai/chat  - SSE streaming chat backed by an OpenAI-compatible LLM.
                                         Read scope: whole project; Write scope: scripts/widgets only.
     OPTIONS /api/ai/chat - CORS preflight
@@ -44,7 +44,7 @@ from quart import Quart, Response, request
 
 from server.env_loader import load_env_files
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_env_files(PROJECT_ROOT)
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024

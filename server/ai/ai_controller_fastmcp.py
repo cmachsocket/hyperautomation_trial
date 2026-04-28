@@ -2,7 +2,7 @@
 Standalone FastMCP controller for HyperAutomation.
 
 Run (stdio transport):
-  python server/ai_controller_fastmcp.py
+    python server/ai/ai_controller_fastmcp.py
 
 This file is intentionally independent from ai_controller.py.
 """
@@ -35,7 +35,7 @@ class SecurityValidationError(Exception):
     pass
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESTRICTED_READ_PATHS = {
     (PROJECT_ROOT / "local.env").resolve(),
     (PROJECT_ROOT / ".env.production").resolve(),
