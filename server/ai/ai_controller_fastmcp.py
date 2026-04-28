@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from fastmcp import FastMCP
 
@@ -96,15 +97,17 @@ def validate_written_code_safety(file_path: str, content: str) -> None:
 @mcp.tool(description="List files in any project directory (read scope is whole project).")
 def list_files(dir_path: str = ".") -> str:
     directory = assert_readable_path(dir_path)
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     for item in sorted(directory.iterdir(), key=lambda p: p.name):
         if item.resolve() in RESTRICTED_READ_PATHS:
             continue
+        size_bytes = item.stat().st_size if item.is_file() else None
         entries.append(
             {
                 "name": item.name,
                 "type": "directory" if item.is_dir() else "file",
                 "path": str(item.relative_to(PROJECT_ROOT)) if item != PROJECT_ROOT else ".",
+                "size_bytes": size_bytes,
             }
         )
     return json.dumps(entries, ensure_ascii=False, indent=2)
