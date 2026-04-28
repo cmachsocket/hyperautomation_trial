@@ -72,26 +72,33 @@ fi
 if is_port_listening "$WS_PORT_VALUE"; then
   echo "[start_servers] ws port $WS_PORT_VALUE already in use, skip starting ws_server.py"
 else
+  # 把 ws_server 的输出重定向到文件，避免掩盖 MCP 的输出
+  WS_LOG_FILE="${ROOT_DIR}/ws_server.log"
   if [[ "$PYTHON_RUNNER_VALUE" == "uv" ]]; then
-    uv run --no-sync -- python -m server.ws_server &
+    uv run --no-sync -- python -m server.ws_server >> "$WS_LOG_FILE" 2>&1 &
   else
-    "$PYTHON_RUNNER_VALUE" -m server.ws_server &
+    "$PYTHON_RUNNER_VALUE" -m server.ws_server >> "$WS_LOG_FILE" 2>&1 &
   fi
   WS_PID=$!
 fi
 
 if [[ -n "${WS_PID:-}" ]]; then
   echo "ws_server.py started (pid=$WS_PID, port=$WS_PORT_VALUE)"
+  echo "ws_server logs: $WS_LOG_FILE"
 fi
 
 if [[ "$START_MCP_VALUE" != "0" ]]; then
-  echo "[start_servers] starting mcp stdio server"
-  echo "[start_servers] mcp debug logs will appear below (via stderr):"
-  echo "---"
+  echo ""
+  echo "================================"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting MCP stdio server"
+  echo "================================"
+  echo ""
   if [[ "$PYTHON_RUNNER_VALUE" == "uv" ]]; then
-    uv run --no-sync -- python -m server.ai.ai_controller_fastmcp
+    # 用 -u 标志禁用 Python 的输出缓冲
+    uv run --no-sync -- python -u -m server.ai.ai_controller_fastmcp
   else
-    "$PYTHON_RUNNER_VALUE" -m server.ai.ai_controller_fastmcp
+    # 用 -u 标志禁用 Python 的输出缓冲
+    "$PYTHON_RUNNER_VALUE" -u -m server.ai.ai_controller_fastmcp
   fi
   exit $?
 fi

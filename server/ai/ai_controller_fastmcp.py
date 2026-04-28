@@ -258,20 +258,25 @@ def rename_file(from_path: str, to_path: str) -> str:
 
 
 if __name__ == "__main__":
+    import time
+    
     # 始终打印启动信息到stderr（不受DEBUG_MCP控制）
     startup_msg = {
         "status": "starting",
         "debug_enabled": DEBUG_MCP,
         "debug_env": _AI_MCP_DEBUG_ENV,
         "project_root": str(PROJECT_ROOT),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    print(f"[mcp] startup {startup_msg}", file=sys.stderr, flush=True)
+    # 确保启动消息立即显示到终端（无缓冲）
+    sys.stderr.write(f"[mcp] {startup_msg}\n")
+    sys.stderr.flush()
     
     _debug_log("startup", startup_msg)
     try:
         mcp.run(transport="stdio")
     except Exception as e:
         _debug_log("fatal_error", {"exception": str(e), "type": type(e).__name__})
-        print(f"[mcp] FATAL ERROR: {e}", file=sys.stderr, flush=True)
+        sys.stderr.write(f"[mcp] FATAL ERROR: {e}\n")
         sys.stderr.flush()
         raise
