@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 from typing import Any
@@ -44,7 +45,7 @@ def _debug_log(event: str, payload: dict[str, Any] | None = None) -> None:
     if not DEBUG_MCP:
         return
     meta = payload or {}
-    print(f"[mcp] {event} {meta}")
+    print(f"[mcp] {event} {meta}", file=sys.stderr, flush=True)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -225,4 +226,9 @@ def rename_file(from_path: str, to_path: str) -> str:
 
 if __name__ == "__main__":
     _debug_log("startup", {"project_root": str(PROJECT_ROOT)})
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    except Exception as e:
+        _debug_log("fatal_error", {"exception": str(e), "type": type(e).__name__})
+        sys.stderr.flush()
+        raise
