@@ -50,7 +50,7 @@ from quart import Quart, Response, request
 
 from server.env_loader import load_env_files
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 load_env_files(PROJECT_ROOT)
 
 MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
@@ -557,6 +557,13 @@ async def handle_chat() -> Response:
                         assistant_text_parts.append(block.text)
                     elif block.type == "tool_use":
                         tool_use_id = block.id or f"auto_{round_idx}_{len(tool_uses)}"
+                        LOGGER.debug(
+                            "[ROUND %d] tool_use block: id=%r, name=%r, input_keys=%s",
+                            round_idx,
+                            block.id,
+                            block.name,
+                            list(block.input.keys()) if hasattr(block.input, 'keys') else type(block.input).__name__,
+                        )
                         tool_uses.append({"id": tool_use_id, "name": block.name, "input": block.input})
 
                 assistant_content = "".join(assistant_text_parts)
@@ -629,6 +636,12 @@ async def handle_chat() -> Response:
                             }
                         ],
                     })
+                    LOGGER.debug(
+                        "[ROUND %d] appended assistant tool_use to messages: id=%r, name=%s",
+                        round_idx,
+                        tc["id"],
+                        tc["name"],
+                    )
                     messages.append({
                         "role": "tool",
                         "content": tool_result,
