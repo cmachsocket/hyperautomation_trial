@@ -152,7 +152,7 @@ SYSTEM_PROMPT = """这是一个超自动化项目，你的任务是为这个项�
 你可以阅读项目中的任何文件来获取信息，但只能修改以下目录中的文件：
 - src/scripts  (worker脚本)
 - src/components/dynamic  (动态组件，也称为widgets，使用vue3编写)
-当文件较大或文档较长时，优先使用 read_file_chunk 分段读取，而不是一次性读取全文。
+当文件较大或文档较长时，优先使用 read_file 分段读取，而不是一次性读取全文。
 请确保你对这些权限限制有清晰的理解，并在操作文件时严格遵守这些规则，注意代码安全。
 不要在每轮对话中遍历整个项目；仅在回答当前问题确有必要时才读取最小范围文件。
 """
@@ -178,7 +178,7 @@ LLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "read_file_chunk",
+            "name": "read_file",
             "description": "Read a file by line range (1-based, inclusive).",
             "parameters": {
                 "type": "object",
@@ -195,7 +195,7 @@ LLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "write_file_chunk",
+            "name": "write_file",
             "description": "Write a file in chunks. Call repeatedly with the same 'upload_id' and increasing 'chunk_index'. Set 'finalize'=true on the last chunk to commit atomically.",
             "parameters": {
                 "type": "object",
@@ -342,35 +342,8 @@ async def tool_list_files(dir_path: str = ".") -> list[dict[str, Any]]:
 
 
 async def tool_read_file(file_path: str) -> str:
-    # Full-file reads are intentionally disabled to avoid large token usage.
-    # Consumers must call `read_file_chunk` with a line range instead.
-    raise ValueError(
-        "Full file reads are disabled. Use 'read_file_chunk' with 'start_line' and 'end_line' instead."
-    )
-
-
-async def tool_read_file_chunk(file_path: str, start_line: int, end_line: int) -> str:
     resolved = assert_readable_path(file_path)
-
-    if start_line < 1 or end_line < 1:
-        raise ValueError("start_line and end_line must be >= 1")
-    if end_line < start_line:
-        raise ValueError("end_line must be >= start_line")
-
-    line_count = end_line - start_line + 1
-    if line_count > MAX_READ_CHUNK_LINES:
-        raise ValueError(
-            f"requested too many lines ({line_count} > {MAX_READ_CHUNK_LINES}), please narrow the range"
-        )
-
-    lines = resolved.read_text(encoding="utf-8").splitlines()
-    total = len(lines)
-    if start_line > total:
-        return ""
-
-    safe_end = min(end_line, total)
-    chunk = lines[start_line - 1 : safe_end]
-    return "\n".join(chunk)
+    return resolved.read_text(encoding="utf-8")
 
 
 def validate_written_code_safety(file_path: str, content: str) -> None:
@@ -391,78 +364,10 @@ def validate_written_code_safety(file_path: str, content: str) -> None:
 
 
 async def tool_write_file(file_path: str, content: str) -> str:
-    # Full-file writes are disabled. Use `write_file_chunk` to upload in pieces and commit atomically.
-    raise ValueError(
-        "Full file writes are disabled. Use 'write_file_chunk' (upload_id, chunk_index, content, finalize) instead."
-    )
-
-
-async def tool_write_file_chunk(upload_id: str, file_path: str, chunk_index: int, content: str, finalize: bool = False) -> str:
-    # Basic validation
-    if not isinstance(upload_id, str) or not upload_id:
-        raise ValueError("upload_id is required and must be a non-empty string")
-    if not isinstance(chunk_index, int) or chunk_index < 0:
-        raise ValueError("chunk_index must be a non-negative integer")
-
     resolved = assert_writable_path(file_path)
-    temp_dir = PROJECT_ROOT / ".ai_write_tmp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    key = hashlib.sha256(f"{upload_id}:{file_path}".encode("utf-8")).hexdigest()
-    chunk_path = temp_dir / f"{key}.chunk{chunk_index:06d}"
-
-    # write chunk (overwrite if same index re-sent)
-    chunk_path.write_text(content, encoding="utf-8")
-
-    if not finalize:
-        return f"OK: stored chunk {chunk_index} for upload_id={upload_id}"
-
-    # finalize: assemble all chunks for this upload
-    chunks = sorted(p for p in temp_dir.iterdir() if p.name.startswith(key) and p.name.endswith(".chunk" + p.name.split(".chunk")[-1]))
-    # Fallback: collect by prefix
-    chunks = sorted([p for p in temp_dir.iterdir() if p.name.startswith(key + ".chunk")])
-    if not chunks:
-        raise ValueError("No chunks found to finalize")
-
-    # read and concatenate, while enforcing size limit
-    parts: list[str] = []
-    total_bytes = 0
-    for p in chunks:
-        part = p.read_text(encoding="utf-8")
-        total_bytes += len(part.encode("utf-8"))
-        if total_bytes > MAX_WRITABLE_FILE_SIZE_BYTES:
-            raise SecurityValidationError(file_path, f"assembled file too large ({total_bytes} bytes)")
-        parts.append(part)
-
-    assembled = "".join(parts)
-
-    # atomic write: write to temp file then rename
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    target_tmp = resolved.with_suffix(resolved.suffix + ".tmp_ai")
-    target_tmp.write_text(assembled, encoding="utf-8")
-
-    try:
-        validate_written_code_safety(file_path, assembled)
-    except Exception:
-        if target_tmp.exists():
-            target_tmp.unlink()
-        raise
-
-    # backup existing content in case validation elsewhere needs rollback
-    if resolved.exists():
-        backup = resolved.with_suffix(resolved.suffix + ".backup_ai")
-        resolved.rename(backup)
-    target_tmp.rename(resolved)
-
-    # cleanup chunks
-    for p in chunks:
-        try:
-            p.unlink()
-        except Exception:
-            pass
-
-    return f"OK: written '{file_path}' (assembled from {len(chunks)} chunks)"
-
+    validate_written_code_safety(str(resolved), content)
+    resolved.write_text(content, encoding="utf-8")
+    return f"Written {resolved}"
 
 async def tool_delete_file(file_path: str) -> str:
     resolved = assert_writable_path(file_path)
@@ -484,35 +389,17 @@ async def dispatch_tool(name: str, args: dict[str, Any]) -> Any:
         return await tool_list_files(str(dir_path))
 
     if name == "read_file":
-        # Explicitly reject any attempt to call the removed full-file read tool.
-        raise ValueError(
-            "ReadFullFileDisabled: full file reads are not permitted. Use 'read_file_chunk' with 'start_line' and 'end_line'."
-        )
-
-    if name == "read_file_chunk":
         file_path = args.get("file_path") or args.get("path") or args.get("filename")
-        start_line = args.get("start_line")
-        end_line = args.get("end_line")
         if file_path is None:
-            raise ValueError("read_file_chunk requires 'file_path' parameter")
-        if start_line is None or end_line is None:
-            raise ValueError("read_file_chunk requires 'start_line' and 'end_line' parameters")
-        return await tool_read_file_chunk(str(file_path), int(start_line), int(end_line))
+            raise ValueError("read_file requires 'file_path' parameter")
+        return await tool_read_file(str(file_path))
 
     if name == "write_file":
-        # Reject direct full-file writes; instruct to use chunked writes instead.
-        raise ValueError(
-            "WriteFullFileDisabled: full file writes are not permitted. Use 'write_file_chunk' to upload in pieces and finalize."
-        )
-    if name == "write_file_chunk":
-        upload_id = args.get("upload_id") or args.get("id")
         file_path = args.get("file_path") or args.get("path")
-        chunk_index = args.get("chunk_index")
         content = args.get("content")
-        finalize = bool(args.get("finalize", False))
-        if upload_id is None or file_path is None or chunk_index is None or content is None:
-            raise ValueError("write_file_chunk requires 'upload_id','file_path','chunk_index','content'")
-        return await tool_write_file_chunk(str(upload_id), str(file_path), int(chunk_index), str(content), finalize)
+        if file_path is None or content is None:
+            raise ValueError("write_file requires 'file_path' and 'content'")
+        return await tool_write_file(str(file_path), str(content))
     if name == "delete_file":
         return await tool_delete_file(str(args["file_path"]))
     if name == "rename_file":
@@ -530,19 +417,19 @@ def format_tool_failure(name: str, err: Exception) -> str:
     if name == "read_file":
         return (
             f"ReadFileDisabled: {msg}. "
-            "Full file reads are disabled; use 'read_file_chunk' with a specific line range."
+            "Full file reads are disabled; use 'read_file' with a specific line range."
         )
     if name == "write_file":
         return (
             f"WriteFileDisabled: {msg}. "
-            "Full file writes are disabled; use 'write_file_chunk' with an 'upload_id' and finalize when complete."
+            "Full file writes are disabled; use 'write_file' with an 'upload_id' and finalize when complete."
         )
-    if name == "write_file_chunk":
+    if name == "write_file":
         return (
             f"WriteFileChunkError: {msg}. "
             "Tip: call with 'upload_id','file_path','chunk_index','content' and set 'finalize'=true on the last chunk."
         )
-    if name == "read_file_chunk":
+    if name == "read_file":
         return (
             f"ReadFileChunkError: {msg}. "
             "Tip: use 1-based inclusive line range and keep chunk size small."
