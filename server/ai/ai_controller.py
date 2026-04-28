@@ -677,6 +677,18 @@ async def handle_chat() -> Response:
                     messages.append({"role": "assistant", "content": response.content})
                     break
 
+                if len(tool_uses) > 1:
+                    yield sse_bytes(
+                        "error",
+                        {
+                            "message": (
+                                "Multiple tool calls in one assistant turn are blocked. "
+                                "Please use exactly one tool call per request, then continue with a follow-up if needed."
+                            )
+                        },
+                    )
+                    break
+
                 tool_call_rounds += 1
                 if tool_call_rounds > MAX_TOOL_CALL_ROUNDS:
                     yield sse_bytes(
