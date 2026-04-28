@@ -556,7 +556,8 @@ async def handle_chat() -> Response:
                     if block.type == "text":
                         assistant_text_parts.append(block.text)
                     elif block.type == "tool_use":
-                        tool_uses.append({"id": block.id, "name": block.name, "input": block.input})
+                        tool_use_id = block.id or f"auto_{round_idx}_{len(tool_uses)}"
+                        tool_uses.append({"id": tool_use_id, "name": block.name, "input": block.input})
 
                 assistant_content = "".join(assistant_text_parts)
                 if assistant_content:
