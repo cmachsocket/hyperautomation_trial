@@ -12,8 +12,10 @@ Env vars:
     ANTHROPIC_API_KEY   LLM API key
     ANTHROPIC_BASE_URL  LLM base URL (optional)
     AI_MODEL            Model name (default: claude-3-5-sonnet-20241022)
-    AI_MAX_TOKENS       Max tokens per response (default: 1024)
+    AI_MAX_TOKENS       Max tokens per response (default: 2048, MiniMax Anthropic-compatible cap)
     AI_TEMPERATURE      Sampling temperature (default: 0.2)
+    AI_DEBUG            Enable debug logs (default: 1)
+    AI_DEBUG_LOG_PATH   Optional debug log file path (default: empty)
 
 Env loading order:
     .env is loaded first, then local.env overrides it.
@@ -33,11 +35,13 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from anthropic import AsyncAnthropic
 from quart import Quart, Response, request
@@ -51,8 +55,28 @@ MAX_WRITABLE_FILE_SIZE_BYTES = 300 * 1024
 MAX_READ_FILE_SIZE_BYTES = int(os.getenv("AI_MAX_READ_FILE_SIZE_BYTES", str(120 * 1024)))
 MAX_READ_CHUNK_LINES = int(os.getenv("AI_MAX_READ_CHUNK_LINES", "400"))
 MAX_TOOL_CALL_ROUNDS = int(os.getenv("AI_MAX_TOOL_CALL_ROUNDS", "20"))
+MAX_MINIMAX_ANTHROPIC_TOKENS = 2048
 AUTH_TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "hyperautomation-dev-secret")
 NOISY_DIR_NAMES = {".git", "node_modules", "__pycache__", "dist"}
+AI_DEBUG = os.getenv("AI_DEBUG", "1").strip() not in {"0", "false", "False", "FALSE"}
+AI_DEBUG_LOG_PATH = os.getenv("AI_DEBUG_LOG_PATH", "").strip()
+
+LOGGER = logging.getLogger("ai_controller")
+if not LOGGER.handlers:
+    _stderr_handler = logging.StreamHandler(sys.stderr)
+    _stderr_handler.setFormatter(logging.Formatter("[ai_controller] %(levelname)s %(message)s"))
+    LOGGER.addHandler(_stderr_handler)
+    if AI_DEBUG_LOG_PATH:
+        try:
+            _file_handler = logging.FileHandler(AI_DEBUG_LOG_PATH, encoding="utf-8")
+            _file_handler.setFormatter(
+                logging.Formatter("%(asctime)s [ai_controller] %(levelname)s %(message)s")
+            )
+            LOGGER.addHandler(_file_handler)
+        except Exception as err:
+            LOGGER.warning("cannot open AI_DEBUG_LOG_PATH=%r: %s", AI_DEBUG_LOG_PATH, err)
+LOGGER.setLevel(logging.DEBUG if AI_DEBUG else logging.INFO)
+LOGGER.propagate = False
 
 DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -514,15 +538,22 @@ async def handle_chat() -> Response:
             base_url=base_url or None,
         )
         model = os.getenv("AI_MODEL", "claude-3-5-sonnet-20241022")
-        max_tokens = int(os.getenv("AI_MAX_TOKENS", "1024"))
+        configured_max_tokens = int(os.getenv("AI_MAX_TOKENS", str(MAX_MINIMAX_ANTHROPIC_TOKENS)))
+        max_tokens = min(configured_max_tokens, MAX_MINIMAX_ANTHROPIC_TOKENS)
+        if configured_max_tokens > MAX_MINIMAX_ANTHROPIC_TOKENS:
+            LOGGER.warning(
+                "AI_MAX_TOKENS=%s exceeds MiniMax Anthropic-compatible cap=%s, clamped",
+                configured_max_tokens,
+                MAX_MINIMAX_ANTHROPIC_TOKENS,
+            )
         temperature = float(os.getenv("AI_TEMPERATURE", "0.2"))
-        print(
-            "[ai_controller] upstream request config: "
-            f"base_url={base_url!r}, "
-            f"api_key={_mask_secret(api_key)!r}, "
-            f"model={model!r}, "
-            f"max_tokens={max_tokens!r}, "
-            f"temperature={temperature!r}"
+        LOGGER.info(
+            "upstream request config: base_url=%r, api_key=%r, model=%r, max_tokens=%r, temperature=%r",
+            base_url,
+            _mask_secret(api_key),
+            model,
+            max_tokens,
+            temperature,
         )
 
         messages: list[dict[str, Any]] = [
@@ -538,7 +569,7 @@ async def handle_chat() -> Response:
                     max_tokens=max_tokens,
                     temperature=temperature,
                     system=SYSTEM_PROMPT,
-                    messages=messages,
+                    messages=cast(Any, messages),
                     tools=[
                         {
                             "name": tool["function"]["name"],
@@ -548,6 +579,8 @@ async def handle_chat() -> Response:
                         for tool in LLM_TOOLS
                     ],
                 )
+                stop_reason = getattr(response, "stop_reason", None)
+                LOGGER.debug("anthropic response stop_reason=%r", stop_reason)
 
                 assistant_text_parts: list[str] = []
                 tool_uses: list[dict[str, Any]] = []
@@ -561,7 +594,27 @@ async def handle_chat() -> Response:
 
                 assistant_content = "".join(assistant_text_parts)
                 if assistant_content:
+                    LOGGER.debug("assistant text length=%d", len(assistant_content))
                     yield sse_bytes("token", {"text": assistant_content})
+
+                if stop_reason == "max_tokens":
+                    LOGGER.warning(
+                        "response truncated by max_tokens=%s (tool_uses=%d)",
+                        max_tokens,
+                        len(tool_uses),
+                    )
+                    if "[TOOL_CALL]" in assistant_content and "[/TOOL_CALL]" not in assistant_content:
+                        yield sse_bytes(
+                            "error",
+                            {
+                                "message": (
+                                    "AI output truncated while generating tool call content. "
+                                    "Current MiniMax Anthropic-compatible max is 2048. "
+                                    "Please split the operation into smaller write steps and retry."
+                                )
+                            },
+                        )
+                        break
 
                 if not tool_uses:
                     messages.append({"role": "assistant", "content": response.content})
@@ -583,13 +636,17 @@ async def handle_chat() -> Response:
                 messages.append({"role": "assistant", "content": response.content})
 
                 for tc in tool_uses:
-                    args = tc.get("input") if isinstance(tc.get("input"), dict) else {}
+                    raw_args = tc.get("input")
+                    args: dict[str, Any] = cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {}
+                    LOGGER.debug("tool_start name=%s args_keys=%s", tc["name"], sorted(args.keys()))
                     yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
 
                     try:
                         raw = await dispatch_tool(tc["name"], args)
                         tool_result = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)
+                        LOGGER.debug("tool_end name=%s status=ok", tc["name"])
                     except Exception as err:
+                        LOGGER.exception("tool_end name=%s status=error", tc["name"])
                         tool_result = format_tool_failure(tc["name"], err)
 
                     yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
@@ -606,6 +663,7 @@ async def handle_chat() -> Response:
                         }
                     )
         except Exception as err:
+            LOGGER.exception("event_stream failed")
             yield sse_bytes("error", {"message": str(err) or "LLM error"})
 
         yield sse_bytes("done", {})
@@ -642,8 +700,10 @@ def start_http_server() -> None:
     app.add_url_rule("/", endpoint="ai_root_not_found", view_func=not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 
     port = int(os.getenv("AI_PORT", "8082"))
-    print(f"[ai_controller] HTTP chat server -> http://localhost:{port}")
-    print("[ai_controller] POST /api/ai/chat  (SSE streaming)")
+    LOGGER.info("HTTP chat server -> http://localhost:%s", port)
+    LOGGER.info("POST /api/ai/chat (SSE streaming)")
+    if AI_DEBUG_LOG_PATH:
+        LOGGER.info("debug logs file -> %s", AI_DEBUG_LOG_PATH)
     app.run(host="0.0.0.0", port=port)
 
 
