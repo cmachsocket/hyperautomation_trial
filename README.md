@@ -72,6 +72,7 @@ Python 服务器依赖：
 
 - AI 聊天接口挂载在主服务同源路径 `/api/ai/chat`。
 - 如果 AI 聊天出现 `HTTP 502`，通常是主服务未启动，或前端仍在访问旧地址。
+- 需要配置 Anthropic 相关环境变量：`ANTHROPIC_API_KEY`、`AI_MODEL`（可选：`ANTHROPIC_BASE_URL`）。
 - 启动主服务与 MCP：`npm run servers:start`
 - 单独启动 MCP：`npm run ai:controller`
 

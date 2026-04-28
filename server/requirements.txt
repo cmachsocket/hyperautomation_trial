@@ -1,5 +1,5 @@
 quart>=0.19,<1
 hypercorn>=0.17,<1
 zarr>=2,<3
-openai>=1.40,<2
+anthropic>=0.28,<1
 fastmcp>=1.0,<2

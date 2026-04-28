@@ -3,16 +3,17 @@ ai_controller.py
 
 HTTP Chat Server (standalone):
     python server/ai/ai_controller.py
-    POST /api/ai/chat  - SSE streaming chat backed by an OpenAI-compatible LLM.
+    POST /api/ai/chat  - SSE streaming chat backed by an Anthropic-compatible LLM.
                                         Read scope: whole project; Write scope: scripts/widgets only.
     OPTIONS /api/ai/chat - CORS preflight
 
 Env vars:
     AI_PORT          HTTP port (default: 8082, standalone mode only)
-    OPENAI_API_KEY   LLM API key
-    OPENAI_BASE_URL  LLM base URL (default: https://api.openai.com/v1)
-                                     Set to http://localhost:11434/v1 for Ollama, etc.
-    AI_MODEL         Model name (default: gpt-4o-mini)
+    ANTHROPIC_API_KEY   LLM API key
+    ANTHROPIC_BASE_URL  LLM base URL (optional)
+    AI_MODEL            Model name (default: claude-3-5-sonnet-20241022)
+    AI_MAX_TOKENS       Max tokens per response (default: 1024)
+    AI_TEMPERATURE      Sampling temperature (default: 0.2)
 
 Env loading order:
     .env is loaded first, then local.env overrides it.
@@ -36,10 +37,9 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from anthropic import AsyncAnthropic
 from quart import Quart, Response, request
 
 from server.env_loader import load_env_files
@@ -67,8 +67,6 @@ DANGEROUS_CODE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bprocess\.exit\s*\(", re.MULTILINE), "process termination is forbidden"),
 ]
 
-CUSTOM_INVOKE_RE = re.compile(r"<invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</invoke>", re.IGNORECASE | re.DOTALL)
-CUSTOM_PARAMETER_RE = re.compile(r"<parameter\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</parameter>", re.IGNORECASE | re.DOTALL)
 
 
 class SecurityValidationError(Exception):
@@ -456,22 +454,6 @@ def sse_bytes(event: str, data: Any) -> bytes:
     return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
 
 
-def _chunk_delta(chunk: Any) -> Any:
-    choices = getattr(chunk, "choices", None)
-    if not choices:
-        return None
-    first = choices[0]
-    return getattr(first, "delta", None)
-
-
-def _get_value(obj: Any, key: str, default: Any = None) -> Any:
-    if obj is None:
-        return default
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
-
-
 def _mask_secret(value: str, head: int = 4, tail: int = 4) -> str:
     if not value:
         return "<empty>"
@@ -480,33 +462,6 @@ def _mask_secret(value: str, head: int = 4, tail: int = 4) -> str:
     return f"{value[:head]}...{value[-tail:]}"
 
 
-def _uses_text_tool_calls(model: str, base_url: str) -> bool:
-    combined = f"{model} {base_url}".lower()
-    return "minimax" in combined or "modelscope" in combined
-
-
-def _extract_text_tool_calls(content: str) -> tuple[list[dict[str, str]], str]:
-    tool_calls: list[dict[str, str]] = []
-
-    def _replace(match: re.Match[str]) -> str:
-        name = match.group(1).strip()
-        body = match.group(2)
-        if not name:
-            return ""
-
-        arguments: dict[str, str] = {}
-        for parameter_match in CUSTOM_PARAMETER_RE.finditer(body):
-            param_name = parameter_match.group(1).strip()
-            param_value = parameter_match.group(2).strip()
-            if param_name:
-                arguments[param_name] = param_value
-
-        tool_calls.append({"id": "", "name": name, "arguments": json.dumps(arguments, ensure_ascii=False)})
-        return ""
-
-    cleaned = CUSTOM_INVOKE_RE.sub(_replace, content)
-    cleaned = cleaned.replace("[TOOL_CALL]", "").strip()
-    return tool_calls, cleaned
 
 
 async def handle_chat() -> Response:
@@ -537,7 +492,8 @@ async def handle_chat() -> Response:
             ):
                 safe_history.append({"role": item["role"], "content": item["content"]})
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    base_url = os.getenv("ANTHROPIC_BASE_URL", "").strip()
 
     async def event_stream():
         if not api_key:
@@ -545,7 +501,7 @@ async def handle_chat() -> Response:
                 "error",
                 {
                     "message": (
-                        "OPENAI_API_KEY is not configured. "
+                        "ANTHROPIC_API_KEY is not configured. "
                         "Please set it in .env/local.env or process environment."
                     )
                 },
@@ -553,22 +509,23 @@ async def handle_chat() -> Response:
             yield sse_bytes("done", {})
             return
 
-        client = AsyncOpenAI(
+        client = AsyncAnthropic(
             api_key=api_key,
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            base_url=base_url or None,
         )
-        model = os.getenv("AI_MODEL", "gpt-4o-mini")
-        resolved_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        text_tool_call_mode = _uses_text_tool_calls(model, resolved_base_url)
+        model = os.getenv("AI_MODEL", "claude-3-5-sonnet-20241022")
+        max_tokens = int(os.getenv("AI_MAX_TOKENS", "1024"))
+        temperature = float(os.getenv("AI_TEMPERATURE", "0.2"))
         print(
             "[ai_controller] upstream request config: "
-            f"base_url={resolved_base_url!r}, "
+            f"base_url={base_url!r}, "
             f"api_key={_mask_secret(api_key)!r}, "
-            f"model={model!r}"
+            f"model={model!r}, "
+            f"max_tokens={max_tokens!r}, "
+            f"temperature={temperature!r}"
         )
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
             *safe_history,
             {"role": "user", "content": user_message.strip()},
         ]
@@ -576,60 +533,38 @@ async def handle_chat() -> Response:
 
         try:
             while True:
-                stream = await client.chat.completions.create(
+                response = await client.messages.create(
                     model=model,
-                    messages=cast(list[ChatCompletionMessageParam], messages),
-                    tools=cast(list[ChatCompletionToolParam], LLM_TOOLS),
-                    stream=True,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                    tools=[
+                        {
+                            "name": tool["function"]["name"],
+                            "description": tool["function"]["description"],
+                            "input_schema": tool["function"]["parameters"],
+                        }
+                        for tool in LLM_TOOLS
+                    ],
                 )
 
-                assistant_content = ""
-                tool_calls_accum: dict[int, dict[str, str]] = {}
+                assistant_text_parts: list[str] = []
+                tool_uses: list[dict[str, Any]] = []
+                for block in response.content or []:
+                    if block.type == "text":
+                        assistant_text_parts.append(block.text)
+                    elif block.type == "tool_use":
+                        tool_uses.append(
+                            {"id": block.id, "name": block.name, "input": block.input}
+                        )
 
-                async for chunk in stream:
-                    delta = _chunk_delta(chunk)
-                    if delta is None:
-                        continue
-
-                    content = _get_value(delta, "content")
-                    if isinstance(content, str) and content:
-                        assistant_content += content
-                        if not text_tool_call_mode:
-                            yield sse_bytes("token", {"text": content})
-
-                    tool_calls = _get_value(delta, "tool_calls")
-                    if not tool_calls:
-                        continue
-
-                    for tool_call in tool_calls:
-                        idx = _get_value(tool_call, "index", 0)
-                        if idx not in tool_calls_accum:
-                            tool_calls_accum[idx] = {"id": "", "name": "", "arguments": ""}
-
-                        tc_id = _get_value(tool_call, "id")
-                        if isinstance(tc_id, str) and tc_id:
-                            tool_calls_accum[idx]["id"] = tc_id
-
-                        fn = _get_value(tool_call, "function", {})
-                        fn_name = _get_value(fn, "name")
-                        if isinstance(fn_name, str) and fn_name:
-                            tool_calls_accum[idx]["name"] = fn_name
-
-                        fn_arguments = _get_value(fn, "arguments")
-                        if isinstance(fn_arguments, str) and fn_arguments:
-                            tool_calls_accum[idx]["arguments"] += fn_arguments
-
-                tool_calls = [tool_calls_accum[k] for k in sorted(tool_calls_accum)]
-
-                if not tool_calls and text_tool_call_mode:
-                    tool_calls, assistant_content = _extract_text_tool_calls(assistant_content)
-                    if assistant_content:
-                        yield sse_bytes("token", {"text": assistant_content})
-                elif text_tool_call_mode and assistant_content:
+                assistant_content = "".join(assistant_text_parts)
+                if assistant_content:
                     yield sse_bytes("token", {"text": assistant_content})
 
-                if not tool_calls:
-                    messages.append({"role": "assistant", "content": assistant_content})
+                if not tool_uses:
+                    messages.append({"role": "assistant", "content": response.content})
                     break
 
                 tool_call_rounds += 1
@@ -645,29 +580,10 @@ async def handle_chat() -> Response:
                     )
                     break
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": assistant_content or None,
-                        "tool_calls": [
-                            {
-                                "id": tc["id"],
-                                "type": "function",
-                                "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                            }
-                            for tc in tool_calls
-                        ],
-                    }
-                )
+                messages.append({"role": "assistant", "content": response.content})
 
-                for tc in tool_calls:
-                    try:
-                        args = json.loads(tc["arguments"] or "{}")
-                        if not isinstance(args, dict):
-                            args = {}
-                    except Exception:
-                        args = {}
-
+                for tc in tool_uses:
+                    args = tc.get("input") if isinstance(tc.get("input"), dict) else {}
                     yield sse_bytes("tool_start", {"name": tc["name"], "args": args})
 
                     try:
@@ -677,7 +593,18 @@ async def handle_chat() -> Response:
                         tool_result = format_tool_failure(tc["name"], err)
 
                     yield sse_bytes("tool_end", {"name": tc["name"], "result": tool_result})
-                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": tool_result})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tc["id"],
+                                    "content": tool_result,
+                                }
+                            ],
+                        }
+                    )
         except Exception as err:
             yield sse_bytes("error", {"message": str(err) or "LLM error"})
 
