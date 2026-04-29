@@ -599,8 +599,9 @@ async def handle_chat() -> Response:
                         )
                         tool_uses.append({"id": tool_use_id, "name": block.name, "input": dict(block.input)})
                         response_content_blocks.append({"type": "tool_use", "id": tool_use_id, "name": block.name, "input": dict(block.input)})
+                    # Skip thinking blocks - MiniMax may not handle them well in tool_use conversations
                     elif block.type == "thinking":
-                        response_content_blocks.append({"type": "thinking", "thinking": block.thinking, "signature": getattr(block, 'signature', None)})
+                        pass
 
                 assistant_content = "".join(assistant_text_parts)
                 if assistant_content:
