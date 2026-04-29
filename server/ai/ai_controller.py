@@ -625,7 +625,7 @@ async def handle_chat() -> Response:
 
                 # Keep only the latest exchange to avoid context bloat.
                 if round_idx > 0:
-                    messages = messages[-6:]
+                    messages = messages[-4:]
 
                 # Process each tool use and append to messages history.
                 for tc in tool_uses:
