@@ -533,6 +533,12 @@ async def handle_chat() -> Response:
             for round_idx in range(MAX_TOOL_CALL_ROUNDS):
                 LOGGER.debug("llm round %d, messages count=%d", round_idx, len(messages))
 
+                LOGGER.debug(
+                    "[ROUND %d] messages to send: count=%d, roles=%s",
+                    round_idx,
+                    len(messages),
+                    [m.get("role") for m in messages],
+                )
                 response = await client.messages.create(
                     model=model,
                     max_tokens=max_tokens,
@@ -595,7 +601,7 @@ async def handle_chat() -> Response:
 
                 # Keep only the latest exchange to avoid context bloat.
                 if round_idx > 0:
-                    messages = messages[-4:]
+                    messages = messages[-6:]
 
                 # Process each tool use and append to messages history.
                 for tc in tool_uses:
