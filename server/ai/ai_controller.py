@@ -582,9 +582,12 @@ async def handle_chat() -> Response:
 
                 assistant_text_parts: list[str] = []
                 tool_uses: list[dict[str, Any]] = []
+                # Store full response content blocks for multi-turn messages
+                response_content_blocks: list[dict[str, Any]] = []
                 for block in response.content or []:
                     if block.type == "text":
                         assistant_text_parts.append(block.text)
+                        response_content_blocks.append({"type": "text", "text": block.text})
                     elif block.type == "tool_use":
                         tool_use_id = block.id or f"auto_{round_idx}_{len(tool_uses)}"
                         LOGGER.debug(
@@ -594,7 +597,10 @@ async def handle_chat() -> Response:
                             block.name,
                             list(block.input.keys()) if hasattr(block.input, 'keys') else type(block.input).__name__,
                         )
-                        tool_uses.append({"id": tool_use_id, "name": block.name, "input": block.input})
+                        tool_uses.append({"id": tool_use_id, "name": block.name, "input": dict(block.input)})
+                        response_content_blocks.append({"type": "tool_use", "id": tool_use_id, "name": block.name, "input": dict(block.input)})
+                    elif block.type == "thinking":
+                        response_content_blocks.append({"type": "thinking", "thinking": block.thinking, "signature": getattr(block, 'signature', None)})
 
                 assistant_content = "".join(assistant_text_parts)
                 if assistant_content:
@@ -654,23 +660,16 @@ async def handle_chat() -> Response:
                         len(messages) + 2,  # +2 for the entries we are about to append
                     )
 
-                    # Append assistant tool_use + tool result to messages
+                    # Append full assistant response (all content blocks: thinking, text, tool_use)
+                    # This is required by MiniMax to maintain coherent multi-turn context
                     messages.append({
                         "role": "assistant",
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": tc["id"],
-                                "name": tc["name"],
-                                "input": tc["input"],
-                            }
-                        ],
+                        "content": response_content_blocks,
                     })
                     LOGGER.debug(
-                        "[ROUND %d] appended assistant tool_use to messages: id=%r, name=%s",
+                        "[ROUND %d] appended full assistant response: content_blocks=%d",
                         round_idx,
-                        tc["id"],
-                        tc["name"],
+                        len(response_content_blocks),
                     )
                     messages.append({
                         "role": "tool",
