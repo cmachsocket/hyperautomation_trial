@@ -547,20 +547,36 @@ async def handle_chat() -> Response:
                                     "[ROUND %d] messages[%d].content[%d] tool_use: id=%r, name=%r",
                                     round_idx, mi, ci, c.get("id"), c.get("name"),
                                 )
-                response = await client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    messages=cast(Any, messages),
-                    tools=[
-                        {
-                            "name": tool["function"]["name"],
-                            "description": tool["function"]["description"],
-                            "input_schema": tool["function"]["parameters"],
-                        }
-                        for tool in LLM_TOOLS
-                    ],
+                LOGGER.debug(
+                    "[ROUND %d] request payload preview: model=%s, messages_count=%d, tools_count=%d",
+                    round_idx,
+                    model,
+                    len(messages),
+                    len(LLM_TOOLS),
                 )
+                try:
+                    response = await client.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        messages=cast(Any, messages),
+                        tools=[
+                            {
+                                "name": tool["function"]["name"],
+                                "description": tool["function"]["description"],
+                                "input_schema": tool["function"]["parameters"],
+                            }
+                            for tool in LLM_TOOLS
+                        ],
+                    )
+                except Exception as api_err:
+                    LOGGER.error(
+                        "[ROUND %d] API call failed: %s\nmessages=%r",
+                        round_idx,
+                        api_err,
+                        messages,
+                    )
+                    raise
                 stop_reason = getattr(response, "stop_reason", None)
                 LOGGER.debug("anthropic response round %d stop_reason=%r", round_idx, stop_reason)
 
