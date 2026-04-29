@@ -539,6 +539,14 @@ async def handle_chat() -> Response:
                     len(messages),
                     [m.get("role") for m in messages],
                 )
+                for mi, m in enumerate(messages):
+                    if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+                        for ci, c in enumerate(m["content"]):
+                            if isinstance(c, dict) and c.get("type") == "tool_use":
+                                LOGGER.debug(
+                                    "[ROUND %d] messages[%d].content[%d] tool_use: id=%r, name=%r",
+                                    round_idx, mi, ci, c.get("id"), c.get("name"),
+                                )
                 response = await client.messages.create(
                     model=model,
                     max_tokens=max_tokens,
