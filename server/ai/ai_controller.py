@@ -674,8 +674,7 @@ async def handle_chat() -> Response:
                     )
                     messages.append({
                         "role": "tool",
-                        "content": tool_result,
-                        "tool_use_id": tc["id"],
+                        "content": [{"type": "tool_result", "tool_use_id": tc["id"], "content": tool_result}],
                     })
 
             # Exceeded MAX_TOOL_CALL_ROUNDS
